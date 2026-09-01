@@ -7,14 +7,14 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from typing import Optional
 import logging
-from ui.styles import Styles
-from ui.player_controls import PlayerControls
-from ui.playlist_view import PlaylistView
-from audio.player import AudioPlayer, PlayerState
-from audio.playlist_manager import PlaylistManager, Track
-from utils.file_handler import FileHandler
-from utils.config_manager import ConfigManager
-from utils.metadata_extractor import MetadataExtractor
+from .styles import Styles
+from .player_controls import PlayerControls
+from .playlist_view import PlaylistView
+from ..audio.player import AudioPlayer, PlayerState
+from ..audio.playlist_manager import PlaylistManager, Track
+from ..utils.file_handler import FileHandler
+from ..utils.config_manager import ConfigManager
+from ..utils.metadata_extractor import MetadataExtractor
 
 # Configurar logging
 logging.basicConfig(

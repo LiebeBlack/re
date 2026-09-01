@@ -4,7 +4,7 @@ PlayerControls - Controles de reproducción para Musik Player
 
 import customtkinter as ctk
 from typing import Optional, Callable
-from ui.styles import Styles
+from .styles import Styles
 
 
 class PlayerControls(ctk.CTkFrame):

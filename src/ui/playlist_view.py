@@ -4,7 +4,7 @@ PlaylistView - Vista de lista de reproducción para Musik Player
 
 import customtkinter as ctk
 from typing import Optional, Callable, List
-from ui.styles import Styles
+from .styles import Styles
 
 
 class PlaylistView(ctk.CTkFrame):
