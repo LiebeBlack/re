@@ -8,11 +8,17 @@ import logging
 
 # Agregar el directorio src al path
 current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, current_dir)
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
+# Agregar el directorio padre (para cuando se ejecuta como módulo)
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 import customtkinter as ctk
-from ui.main_window import MainWindow
-from ui.styles import Styles
+from src.ui.main_window import MainWindow
+from src.ui.styles import Styles
 
 # Configurar logging
 logging.basicConfig(
