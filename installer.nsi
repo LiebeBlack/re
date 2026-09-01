@@ -14,6 +14,10 @@
 
 RequestExecutionLevel admin
 
+!define OUTPUTFILE "MusikPlayer-Setup.exe"
+
+OutFile "${OUTPUTFILE}"
+
 InstallDir "$PROGRAMFILES\${APPNAME}"
 
 Page directory
