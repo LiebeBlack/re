@@ -68,14 +68,14 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: MusikPlayer-macOS
-        path: dist/MusikPlayer
+        path: dist/MusikPlayer/MusikPlayer
     
     - name: Upload artifact (Linux)
       if: matrix.os == 'ubuntu-latest'
       uses: actions/upload-artifact@v4
       with:
         name: MusikPlayer-Linux
-        path: dist/musikplayer
+        path: dist/musikplayer/musikplayer
   
   release:
     needs: build
@@ -97,8 +97,8 @@ jobs:
         name: Release v${{ github.run_number }}
         files: |
           artifacts/MusikPlayer-Windows/MusikPlayer-Setup.exe
-          artifacts/MusikPlayer-macOS/*
-          artifacts/MusikPlayer-Linux/*
+          artifacts/MusikPlayer-macOS/MusikPlayer
+          artifacts/MusikPlayer-Linux/musikplayer
         draft: false
         prerelease: false
         generate_release_notes: true
