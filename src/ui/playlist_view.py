@@ -48,6 +48,22 @@ class PlaylistView(ctk.CTkFrame):
         )
         self._count_label.pack(side="right")
         
+        # Frame de búsqueda
+        search_frame = ctk.CTkFrame(self, fg_color="transparent")
+        search_frame.pack(fill="x", padx=10, pady=(5, 10))
+        
+        # Entry de búsqueda
+        self._search_entry = ctk.CTkEntry(
+            search_frame,
+            placeholder_text="🔍 Search playlist...",
+            height=30,
+            font=Styles.NORMAL_FONT,
+            **Styles.get_frame_style("secondary")
+        )
+        self._search_entry.pack(fill="x")
+        self._search_entry.configure(command=self._on_search)
+        self._search_entry.bind("<KeyRelease>", lambda e: self._on_search())
+        
         # Scrollable frame para la lista
         self._scrollable_frame = ctk.CTkScrollableFrame(
             self,
@@ -58,6 +74,9 @@ class PlaylistView(ctk.CTkFrame):
         
         # Lista para guardar los frames de las pistas
         self._track_frames: List[ctk.CTkFrame] = []
+        
+        # Lista para guardar las pistas actuales (filtradas o todas)
+        self._current_tracks: List[dict] = []
     
     def add_track(self, title: str, artist: str, duration: float, index: int, is_current: bool = False) -> None:
         """
@@ -70,6 +89,34 @@ class PlaylistView(ctk.CTkFrame):
             index: Índice de la pista
             is_current: True si es la pista actual
         """
+        # Guardar información de la pista
+        track_data = {
+            "title": title,
+            "artist": artist,
+            "duration": duration,
+            "index": index,
+            "is_current": is_current
+        }
+        self._current_tracks.append(track_data)
+        
+        # Solo mostrar si no hay búsqueda activa o si coincide con la búsqueda
+        search_text = self._search_entry.get().lower()
+        if not search_text or search_text in title.lower() or search_text in artist.lower():
+            self._display_track(track_data)
+    
+    def _display_track(self, track_data: dict) -> None:
+        """
+        Muestra una pista en la vista
+        
+        Args:
+            track_data: Diccionario con información de la pista
+        """
+        title = track_data["title"]
+        artist = track_data["artist"]
+        duration = track_data["duration"]
+        index = track_data["index"]
+        is_current = track_data["is_current"]
+        
         # Frame de la pista
         track_frame = ctk.CTkFrame(
             self._scrollable_frame,
@@ -163,6 +210,7 @@ class PlaylistView(ctk.CTkFrame):
         for frame in self._track_frames:
             frame.destroy()
         self._track_frames.clear()
+        self._current_tracks.clear()
         self._update_count(0)
     
     def update_track(self, index: int, is_current: bool) -> None:
@@ -254,3 +302,29 @@ class PlaylistView(ctk.CTkFrame):
             callback: Función a llamar al remover una pista
         """
         self._on_remove_track = callback
+    
+    def _on_search(self) -> None:
+        """Maneja la búsqueda en la playlist"""
+        search_text = self._search_entry.get().lower()
+        
+        # Limpiar vista actual
+        for frame in self._track_frames:
+            frame.destroy()
+        self._track_frames.clear()
+        
+        # Filtrar y mostrar pistas
+        for track_data in self._current_tracks:
+            title = track_data["title"].lower()
+            artist = track_data["artist"].lower()
+            
+            if not search_text or search_text in title or search_text in artist:
+                self._display_track(track_data)
+        
+        # Actualizar contador
+        visible_count = len(self._track_frames)
+        total_count = len(self._current_tracks)
+        
+        if search_text:
+            self._count_label.configure(text=f"{visible_count}/{total_count} tracks")
+        else:
+            self._count_label.configure(text=f"{total_count} tracks")

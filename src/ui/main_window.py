@@ -14,6 +14,7 @@ from audio.player import AudioPlayer, PlayerState
 from audio.playlist_manager import PlaylistManager, Track
 from utils.file_handler import FileHandler
 from utils.config_manager import ConfigManager
+from utils.metadata_extractor import MetadataExtractor
 
 # Configurar logging
 logging.basicConfig(
@@ -33,6 +34,18 @@ class MainWindow(ctk.CTk):
         # Configurar ventana
         self.title("Musik Player")
         
+        # Inicializar componentes
+        self._config_manager = ConfigManager()
+        self._audio_player = AudioPlayer()
+        self._playlist_manager = PlaylistManager()
+        
+        # Cargar configuración de shuffle/repeat
+        self._playlist_manager.set_shuffle(self._config_manager.get_shuffle())
+        self._playlist_manager.set_repeat_mode(self._config_manager.get_repeat_mode())
+        
+        # Cargar playlist guardada
+        self._load_saved_playlist()
+        
         # Cargar geometría desde configuración
         width, height, x, y = self._config_manager.get_window_geometry()
         self.geometry(f"{width}x{height}+{x}+{y}")
@@ -41,11 +54,6 @@ class MainWindow(ctk.CTk):
         # Cargar volumen desde configuración
         saved_volume = self._config_manager.get_volume()
         self._audio_player.set_volume(saved_volume)
-        
-        # Inicializar componentes
-        self._config_manager = ConfigManager()
-        self._audio_player = AudioPlayer()
-        self._playlist_manager = PlaylistManager()
         
         # Configurar callbacks del reproductor
         self._audio_player.set_position_callback(self._on_position_update)
@@ -56,9 +64,9 @@ class MainWindow(ctk.CTk):
         self._current_position = 0.0
         self._total_duration = 0.0
         self._is_seeking = False
-        self._is_shuffle = False
+        self._is_shuffle = self._config_manager.get_shuffle()
         self._is_repeat = False
-        self._repeat_mode = 0  # 0: off, 1: all, 2: one
+        self._repeat_mode = self._config_manager.get_repeat_mode()  # 0: off, 1: all, 2: one
         
         # Configurar interfaz
         self._setup_ui()
@@ -67,6 +75,8 @@ class MainWindow(ctk.CTk):
         
         # Estado inicial
         self._update_ui_state()
+        self._player_controls.set_shuffle_state(self._is_shuffle)
+        self._player_controls.set_repeat_state(self._repeat_mode)
     
     def _setup_ui(self) -> None:
         """Configura la interfaz gráfica"""
@@ -163,6 +173,8 @@ class MainWindow(ctk.CTk):
         self._player_controls.set_next_callback(self._on_next)
         self._player_controls.set_previous_callback(self._on_previous)
         self._player_controls.set_volume_callback(self._on_volume_change)
+        self._player_controls.set_shuffle_callback(self._on_shuffle)
+        self._player_controls.set_repeat_callback(self._on_repeat)
         
         # Callbacks de playlist
         self._playlist_view.set_track_select_callback(self._on_track_select)
@@ -194,20 +206,16 @@ class MainWindow(ctk.CTk):
         """
         for file_path in file_paths:
             if not self._playlist_manager.has_track(file_path):
+                # Extraer metadatos
+                metadata = MetadataExtractor.extract_metadata(file_path)
+                
                 # Crear track
                 track = Track(
                     file_path=file_path,
-                    title=FileHandler.get_file_name(file_path),
-                    artist="Unknown"
+                    title=metadata.get("title", FileHandler.get_file_name(file_path)),
+                    artist=metadata.get("artist", "Unknown"),
+                    duration=metadata.get("duration", 0.0)
                 )
-                
-                # Obtener duración aproximada
-                try:
-                    import pygame
-                    sound = pygame.mixer.Sound(file_path)
-                    track.duration = sound.get_length()
-                except:
-                    track.duration = 0.0
                 
                 self._playlist_manager.add_track(track)
         
@@ -218,6 +226,20 @@ class MainWindow(ctk.CTk):
         if self._playlist_manager.get_current_index() == -1 and not self._playlist_manager.is_empty():
             self._playlist_manager.set_current_index(0)
             self._load_current_track()
+        
+        # Guardar playlist automáticamente
+        self._playlist_manager.save_playlist()
+    
+    def _load_saved_playlist(self) -> None:
+        """Carga la playlist guardada al iniciar"""
+        if self._playlist_manager.load_playlist():
+            self._refresh_playlist_view()
+            
+            # Cargar la pista actual si existe
+            if not self._playlist_manager.is_empty() and self._playlist_manager.get_current_index() >= 0:
+                self._load_current_track()
+            
+            logger.info("Playlist guardada cargada exitosamente")
     
     def _refresh_playlist_view(self) -> None:
         """Actualiza la vista de la playlist"""
@@ -340,7 +362,14 @@ class MainWindow(ctk.CTk):
     
     def _on_track_end(self) -> None:
         """Callback cuando termina una pista"""
-        self.after(0, self._on_next)
+        repeat_mode = self._playlist_manager.get_repeat_mode()
+        
+        if repeat_mode == 2:  # Repeat one
+            # Repetir la misma canción
+            self._audio_player.play()
+        else:
+            # Avanzar a la siguiente canción
+            self.after(0, self._on_next)
     
     def _on_track_select(self, index: int) -> None:
         """
@@ -375,6 +404,9 @@ class MainWindow(ctk.CTk):
             
             self._refresh_playlist_view()
             self._update_ui_state()
+            
+            # Guardar playlist automáticamente
+            self._playlist_manager.save_playlist()
     
     def _update_progress_ui(self) -> None:
         """Actualiza la UI de la barra de progreso"""
@@ -449,10 +481,10 @@ class MainWindow(ctk.CTk):
         self.bind("<m>", lambda e: self._toggle_mute())
         
         # S: Toggle Shuffle
-        self.bind("<s>", lambda e: self._toggle_shuffle())
+        self.bind("<s>", lambda e: self._on_shuffle())
         
         # R: Toggle Repeat
-        self.bind("<r>", lambda e: self._toggle_repeat())
+        self.bind("<r>", lambda e: self._on_repeat())
         
         # L: Load files
         self.bind("<l>", lambda e: self._on_load_files())
@@ -523,23 +555,32 @@ class MainWindow(ctk.CTk):
     
     def _toggle_shuffle(self) -> None:
         """Alterna el modo shuffle"""
-        current_shuffle = self._config_manager.get_shuffle()
+        current_shuffle = self._playlist_manager.get_shuffle()
         new_shuffle = not current_shuffle
+        self._playlist_manager.set_shuffle(new_shuffle)
         self._config_manager.set_shuffle(new_shuffle)
         self._is_shuffle = new_shuffle
-        modes = ["Off", "Repeat All", "Repeat One"]
+        self._player_controls.set_shuffle_state(new_shuffle)
         logger.info(f"Shuffle: {'Activado' if new_shuffle else 'Desactivado'}")
-        # TODO: Implementar lógica de shuffle en PlaylistManager
     
     def _toggle_repeat(self) -> None:
         """Alterna el modo repeat"""
-        current_mode = self._config_manager.get_repeat_mode()
+        current_mode = self._playlist_manager.get_repeat_mode()
         new_mode = (current_mode + 1) % 3
+        self._playlist_manager.set_repeat_mode(new_mode)
         self._config_manager.set_repeat_mode(new_mode)
         self._repeat_mode = new_mode
+        self._player_controls.set_repeat_state(new_mode)
         modes = ["Off", "Repeat All", "Repeat One"]
         logger.info(f"Repeat: {modes[new_mode]}")
-        # TODO: Implementar lógica de repeat en PlaylistManager
+    
+    def _on_shuffle(self) -> None:
+        """Maneja el clic en el botón shuffle"""
+        self._toggle_shuffle()
+    
+    def _on_repeat(self) -> None:
+        """Maneja el clic en el botón repeat"""
+        self._toggle_repeat()
     
     def _toggle_fullscreen(self) -> None:
         """Alterna el modo pantalla completa"""
@@ -580,6 +621,10 @@ class MainWindow(ctk.CTk):
         # Guardar volumen actual
         current_volume = self._audio_player.get_volume()
         self._config_manager.set_volume(current_volume)
+        
+        # Guardar estado de shuffle/repeat
+        self._config_manager.set_shuffle(self._playlist_manager.get_shuffle())
+        self._config_manager.set_repeat_mode(self._playlist_manager.get_repeat_mode())
         
         # Guardar configuración
         self._config_manager.save()

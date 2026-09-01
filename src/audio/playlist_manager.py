@@ -3,8 +3,10 @@ PlaylistManager - Gestión de lista de reproducción
 """
 
 import logging
+import random
+import json
 from typing import List, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 from pathlib import Path
 
 # Configurar logging
@@ -37,16 +39,41 @@ class Track:
     def is_valid(self) -> bool:
         """Verifica si la pista es válida (archivo existe)"""
         return Path(self.file_path).exists() and Path(self.file_path).is_file()
+    
+    def to_dict(self) -> dict:
+        """Convierte la pista a diccionario"""
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'Track':
+        """Crea una pista desde un diccionario"""
+        return cls(**data)
 
 
 class PlaylistManager:
     """Clase para gestionar la lista de reproducción"""
     
-    def __init__(self):
-        """Inicializa el gestor de playlist"""
+    PLAYLIST_FILE = "musik_playlist.json"
+    
+    def __init__(self, playlist_dir: Optional[str] = None):
+        """
+        Inicializa el gestor de playlist
+        
+        Args:
+            playlist_dir: Directorio para guardar la playlist (default: directorio actual)
+        """
+        if playlist_dir:
+            self._playlist_path = Path(playlist_dir) / self.PLAYLIST_FILE
+        else:
+            self._playlist_path = Path.cwd() / self.PLAYLIST_FILE
+        
         self._tracks: List[Track] = []
         self._current_index: int = -1
-        logger.info("PlaylistManager inicializado")
+        self._shuffle = False
+        self._repeat_mode = 0  # 0: off, 1: all, 2: one
+        self._shuffled_indices: List[int] = []
+        self._shuffle_index = 0
+        logger.info(f"PlaylistManager inicializado con ruta: {self._playlist_path}")
     
     def add_track(self, track: Track) -> bool:
         """
@@ -173,29 +200,7 @@ class PlaylistManager:
             return self._tracks[self._current_index - 1]
         return None
     
-    def next(self) -> Optional[Track]:
-        """
-        Avanza a la siguiente pista
-        
-        Returns:
-            Siguiente pista si existe, None en caso contrario
-        """
-        if self._current_index < len(self._tracks) - 1:
-            self._current_index += 1
-            return self._tracks[self._current_index]
-        return None
-    
-    def previous(self) -> Optional[Track]:
-        """
-        Retrocede a la pista anterior
-        
-        Returns:
-            Pista anterior si existe, None en caso contrario
-        """
-        if self._current_index > 0:
-            self._current_index -= 1
-            return self._tracks[self._current_index]
-        return None
+
     
     def set_current_index(self, index: int) -> bool:
         """
@@ -259,3 +264,245 @@ class PlaylistManager:
             True si la pista está en la playlist, False en caso contrario
         """
         return any(track.file_path == file_path for track in self._tracks)
+    
+    def set_shuffle(self, shuffle: bool) -> None:
+        """
+        Establece el modo shuffle
+        
+        Args:
+            shuffle: True para activar shuffle, False para desactivar
+        """
+        self._shuffle = shuffle
+        if shuffle and len(self._tracks) > 0:
+            self._generate_shuffle_order()
+        else:
+            self._shuffled_indices = []
+            self._shuffle_index = 0
+        logger.info(f"Shuffle {'activado' if shuffle else 'desactivado'}")
+    
+    def get_shuffle(self) -> bool:
+        """
+        Obtiene el estado de shuffle
+        
+        Returns:
+            True si shuffle está activo, False en caso contrario
+        """
+        return self._shuffle
+    
+    def _generate_shuffle_order(self) -> None:
+        """Genera un orden aleatorio de reproducción"""
+        self._shuffled_indices = list(range(len(self._tracks)))
+        random.shuffle(self._shuffled_indices)
+        self._shuffle_index = 0
+        logger.debug("Orden shuffle generado")
+    
+    def set_repeat_mode(self, mode: int) -> None:
+        """
+        Establece el modo de repetición
+        
+        Args:
+            mode: 0: off, 1: all, 2: one
+        """
+        self._repeat_mode = max(0, min(2, mode))
+        modes = ["Off", "Repeat All", "Repeat One"]
+        logger.info(f"Repeat mode: {modes[self._repeat_mode]}")
+    
+    def get_repeat_mode(self) -> int:
+        """
+        Obtiene el modo de repetición
+        
+        Returns:
+            0: off, 1: all, 2: one
+        """
+        return self._repeat_mode
+    
+    def next(self) -> Optional[Track]:
+        """
+        Avanza a la siguiente pista (considerando shuffle y repeat)
+        
+        Returns:
+            Siguiente pista si existe, None en caso contrario
+        """
+        if not self._tracks:
+            return None
+        
+        if self._shuffle:
+            return self._next_shuffle()
+        else:
+            return self._next_normal()
+    
+    def _next_normal(self) -> Optional[Track]:
+        """Avanza a la siguiente pista en modo normal"""
+        if self._current_index < len(self._tracks) - 1:
+            self._current_index += 1
+            return self._tracks[self._current_index]
+        elif self._repeat_mode == 1:  # Repeat all
+            self._current_index = 0
+            return self._tracks[0]
+        return None
+    
+    def _next_shuffle(self) -> Optional[Track]:
+        """Avanza a la siguiente pista en modo shuffle"""
+        if not self._shuffled_indices:
+            self._generate_shuffle_order()
+        
+        self._shuffle_index += 1
+        
+        if self._shuffle_index >= len(self._shuffled_indices):
+            if self._repeat_mode == 1:  # Repeat all
+                self._shuffle_index = 0
+                random.shuffle(self._shuffled_indices)
+            else:
+                return None
+        
+        actual_index = self._shuffled_indices[self._shuffle_index]
+        self._current_index = actual_index
+        return self._tracks[actual_index]
+    
+    def previous(self) -> Optional[Track]:
+        """
+        Retrocede a la pista anterior (considerando shuffle y repeat)
+        
+        Returns:
+            Pista anterior si existe, None en caso contrario
+        """
+        if not self._tracks:
+            return None
+        
+        if self._shuffle:
+            return self._previous_shuffle()
+        else:
+            return self._previous_normal()
+    
+    def _previous_normal(self) -> Optional[Track]:
+        """Retrocede a la pista anterior en modo normal"""
+        if self._current_index > 0:
+            self._current_index -= 1
+            return self._tracks[self._current_index]
+        elif self._repeat_mode == 1:  # Repeat all
+            self._current_index = len(self._tracks) - 1
+            return self._tracks[-1]
+        return None
+    
+    def _previous_shuffle(self) -> Optional[Track]:
+        """Retrocede a la pista anterior en modo shuffle"""
+        if not self._shuffled_indices:
+            self._generate_shuffle_order()
+        
+        self._shuffle_index -= 1
+        
+        if self._shuffle_index < 0:
+            if self._repeat_mode == 1:  # Repeat all
+                self._shuffle_index = len(self._shuffled_indices) - 1
+            else:
+                self._shuffle_index = 0
+        
+        actual_index = self._shuffled_indices[self._shuffle_index]
+        self._current_index = actual_index
+        return self._tracks[actual_index]
+    
+    def save_playlist(self, file_path: Optional[str] = None) -> bool:
+        """
+        Guarda la playlist actual en un archivo JSON
+        
+        Args:
+            file_path: Ruta del archivo (default: usa la ruta por defecto)
+            
+        Returns:
+            True si se guardó exitosamente, False en caso contrario
+        """
+        try:
+            save_path = Path(file_path) if file_path else self._playlist_path
+            
+            playlist_data = {
+                "tracks": [track.to_dict() for track in self._tracks],
+                "current_index": self._current_index,
+                "shuffle": self._shuffle,
+                "repeat_mode": self._repeat_mode
+            }
+            
+            with open(save_path, 'w', encoding='utf-8') as f:
+                json.dump(playlist_data, f, indent=4, ensure_ascii=False)
+            
+            logger.info(f"Playlist guardada en: {save_path}")
+            return True
+        except Exception as e:
+            logger.error(f"Error al guardar playlist: {e}")
+            return False
+    
+    def load_playlist(self, file_path: Optional[str] = None) -> bool:
+        """
+        Carga una playlist desde un archivo JSON
+        
+        Args:
+            file_path: Ruta del archivo (default: usa la ruta por defecto)
+            
+        Returns:
+            True si se cargó exitosamente, False en caso contrario
+        """
+        try:
+            load_path = Path(file_path) if file_path else self._playlist_path
+            
+            if not load_path.exists():
+                logger.info(f"No existe archivo de playlist: {load_path}")
+                return False
+            
+            with open(load_path, 'r', encoding='utf-8') as f:
+                playlist_data = json.load(f)
+            
+            # Cargar pistas
+            self._tracks = [Track.from_dict(track_data) for track_data in playlist_data.get("tracks", [])]
+            
+            # Cargar configuración
+            self._current_index = playlist_data.get("current_index", -1)
+            self._shuffle = playlist_data.get("shuffle", False)
+            self._repeat_mode = playlist_data.get("repeat_mode", 0)
+            
+            # Regenerar orden shuffle si está activo
+            if self._shuffle and len(self._tracks) > 0:
+                self._generate_shuffle_order()
+            
+            logger.info(f"Playlist cargada desde: {load_path}")
+            logger.info(f"{len(self._tracks)} pistas cargadas")
+            return True
+        except json.JSONDecodeError as e:
+            logger.error(f"Error al decodificar JSON de playlist: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Error al cargar playlist: {e}")
+            return False
+    
+    def export_playlist(self, file_path: str) -> bool:
+        """
+        Exporta la playlist actual a un archivo específico
+        
+        Args:
+            file_path: Ruta del archivo de destino
+            
+        Returns:
+            True si se exportó exitosamente, False en caso contrario
+        """
+        return self.save_playlist(file_path)
+    
+    def create_m3u_playlist(self, file_path: str) -> bool:
+        """
+        Crea un archivo M3U de la playlist actual
+        
+        Args:
+            file_path: Ruta del archivo M3U
+            
+        Returns:
+            True si se creó exitosamente, False en caso contrario
+        """
+        try:
+            with open(file_path, 'w', encoding='utf-8') as f:
+                f.write("#EXTM3U\n")
+                for track in self._tracks:
+                    f.write(f"#EXTINF:{int(track.duration)},{track.artist} - {track.title}\n")
+                    f.write(f"{track.file_path}\n")
+            
+            logger.info(f"Playlist M3U creada en: {file_path}")
+            return True
+        except Exception as e:
+            logger.error(f"Error al crear playlist M3U: {e}")
+            return False

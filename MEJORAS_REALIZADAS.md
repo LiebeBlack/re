@@ -2,7 +2,92 @@
 
 ## Resumen de Mejoras
 
-Se ha mejorado significativamente el código para hacerlo más robusto, completo y sin errores.
+Se ha mejorado significativamente el código para hacerlo más robusto, completo y profesional. Se han agregado múltiples funcionalidades faltantes y se ha preparado el proyecto para release en GitHub.
+
+## Mejoras Recientes (Versión 1.0.0)
+
+### 1. Funcionalidades Nuevas
+
+#### Shuffle y Repeat
+- **Implementación completa en PlaylistManager**: Lógica de shuffle con orden aleatorio de reproducción
+- **Modos de Repeat**: Off, Repeat All, Repeat One
+- **Integración con UI**: Botones funcionales con indicadores visuales
+- **Persistencia**: Estado guardado automáticamente
+- **Atajos de teclado**: S para shuffle, R para repeat
+
+#### Persistencia de Playlist
+- **Guardado automático**: Playlist se guarda al agregar/remover pistas
+- **Carga al inicio**: Playlist se restaura al iniciar la aplicación
+- **Formato JSON**: Estructura serializable con metadatos
+- **Exportación M3U**: Soporte para exportar a formato M3U estándar
+- **Configuración de shuffle/repeat**: Estado de modos guardado en playlist
+
+#### Extracción de Metadatos con Mutagen
+- **Módulo MetadataExtractor**: Extracción avanzada de metadatos
+- **Soporte múltiple**: MP3, FLAC, OGG, WAV
+- **Información completa**: Título, artista, álbum, año, género, duración
+- **Fallback inteligente**: Usa nombre de archivo si metadatos no disponibles
+- **Integración con UI**: Metadatos mostrados en playlist
+
+#### Búsqueda en Playlist
+- **Campo de búsqueda**: Filtrado en tiempo real por título/artista
+- **Visualización dinámica**: Muestra resultados filtrados
+- **Contador inteligente**: Muestra count/total cuando hay búsqueda activa
+- **Case insensitive**: Búsqueda no sensible a mayúsculas/minúsculas
+
+#### Atajos de Teclado Mejorados
+- **Completos**: Todos los controles accesibles desde teclado
+- **Documentados**: Lista completa en README
+- **Funcionales**: Integrados con callbacks apropiados
+- **Intuitivos**: Atajos estándar de reproductores
+
+### 2. Correcciones de Bugs
+
+#### Bug de Inicialización en MainWindow
+- **Problema**: `_config_manager` usado antes de inicialización
+- **Solución**: Reordenamiento de inicialización de componentes
+- **Impacto**: Evita crash al iniciar la aplicación
+
+#### Callbacks de Shuffle/Repeat
+- **Problema**: Botones no conectados a lógica de PlaylistManager
+- **Solución**: Implementación de callbacks completos
+- **Impacto**: Funcionalidad shuffle/repeat ahora operativa
+
+### 3. Build y Deploy
+
+#### Script de Compilación (build.py)
+- **Multiplataforma**: Soporte para Windows, macOS, Linux
+- **Automatizado**: Instalación de dependencias y compilación
+- **PyInstaller**: Configuración optimizada para distribución
+- **Iconos**: Soporte para iconos de aplicación
+
+#### GitHub Actions Workflow
+- **CI/CD automatizado**: Build en Windows, macOS, Linux
+- **Release automático**: Creación de releases en GitHub
+- **Artifacts**: Upload de ejecutables compilados
+- **Trigger**: Tags de versión (v*)
+
+#### Dependencias Actualizadas
+- **PyInstaller agregado**: Para compilación de ejecutables
+- **Versiones específicas**: Rangos definidos para estabilidad
+- **requirements.txt actualizado**: Todas las dependencias necesarias
+
+### 4. Documentación
+
+#### README.md Mejorado
+- **Características completas**: Lista actualizada de funcionalidades
+- **Atajos de teclado**: Documentación de todos los shortcuts
+- **Compilación**: Instrucciones para crear ejecutables
+- **Configuración**: Explicación de persistencia y archivos
+- **Troubleshooting**: Solución de problemas comunes
+- **Estructura**: Diagrama actualizado del proyecto
+
+#### Registro de Cambios
+- **MEJORAS_REALIZADAS.md**: Documentación completa de mejoras
+- **Categorización**: Organizado por tipo de mejora
+- **Versiones**: Referencias a versiones específicas
+
+## Mejoras Anteriores
 
 ## 1. Manejo de Errores y Excepciones
 

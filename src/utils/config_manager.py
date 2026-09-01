@@ -22,9 +22,10 @@ class AppConfig:
     window_y: int = 100
     shuffle: bool = False
     repeat_mode: int = 0  # 0: off, 1: all, 2: one
-    theme: str = "dark"
+    theme: str = "dark_premium"
     last_playlist: Optional[str] = None
     auto_play: bool = False
+    save_playlist: bool = True
     
     def to_dict(self) -> Dict[str, Any]:
         """Convierte la configuración a diccionario"""

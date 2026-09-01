@@ -167,11 +167,29 @@ class PlayerControls(ctk.CTkFrame):
         """Maneja el clic en el botón shuffle"""
         if self._on_shuffle:
             self._on_shuffle()
+        else:
+            # Toggle visual state si no hay callback
+            current_color = self._shuffle_btn.cget("fg_color")
+            if current_color == Styles.ACCENT_COLOR:
+                self._shuffle_btn.configure(fg_color=Styles.BUTTON_COLOR)
+            else:
+                self._shuffle_btn.configure(fg_color=Styles.ACCENT_COLOR)
     
     def _on_repeat_click(self) -> None:
         """Maneja el clic en el botón repeat"""
         if self._on_repeat:
             self._on_repeat()
+        else:
+            # Toggle visual state si no hay callback
+            current_text = self._repeat_btn.cget("text")
+            current_color = self._repeat_btn.cget("fg_color")
+            if current_text == "🔁":
+                if current_color == Styles.ACCENT_COLOR:
+                    self._repeat_btn.configure(text="🔁", fg_color=Styles.BUTTON_COLOR)
+                else:
+                    self._repeat_btn.configure(text="🔁", fg_color=Styles.ACCENT_COLOR)
+            else:
+                self._repeat_btn.configure(text="🔁", fg_color=Styles.BUTTON_COLOR)
     
     def set_play_callback(self, callback: Callable[[], None]) -> None:
         """
