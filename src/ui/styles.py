@@ -173,10 +173,10 @@ class Styles:
         
         if theme_name == "light":
             ctk.set_appearance_mode("light")
+            ctk.set_default_color_theme("blue")
         else:
             ctk.set_appearance_mode("dark")
-        
-        ctk.set_default_color_theme("dark")
+            ctk.set_default_color_theme("blue")
     
     @classmethod
     def get_button_style(cls, style_type: str = "primary") -> dict:
