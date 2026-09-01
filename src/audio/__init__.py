@@ -2,7 +2,7 @@
 Módulos de audio para Musik Player
 """
 
-from .player import AudioPlayer
-from .playlist_manager import PlaylistManager
+from src.audio.player import AudioPlayer
+from src.audio.playlist_manager import PlaylistManager
 
 __all__ = ['AudioPlayer', 'PlaylistManager']

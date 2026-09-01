@@ -20,11 +20,6 @@ class PlayerState(Enum):
     ERROR = "error"
 
 
-# Configurar logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 
@@ -352,7 +347,10 @@ class AudioPlayer:
             self._update_thread.join(timeout=1.0)
     
     def _update_position(self) -> None:
-        """Actualiza la posición de reproducción en un hilo separado"""
+        """Actualiza la posición de reproducción en un hilo separado optimizado"""
+        import time
+        last_callback_time = 0
+        
         while self._is_running and self._state == PlayerState.PLAYING:
             try:
                 with self._lock:
@@ -362,8 +360,11 @@ class AudioPlayer:
                     else:
                         self._position = 0
                 
-                if self._on_position_update:
+                # Callback con throttling (máximo 10 veces por segundo)
+                current_time = time.time()
+                if self._on_position_update and (current_time - last_callback_time >= 0.1):
                     self._on_position_update(self._position, self._duration)
+                    last_callback_time = current_time
                 
                 # Verificar si la canción terminó
                 if self._duration > 0 and self._position >= self._duration:
@@ -372,7 +373,7 @@ class AudioPlayer:
                         self._on_track_end()
                     break
                 
-                time.sleep(0.1)
+                time.sleep(0.05)  # Reducido para mejor rendimiento
             except pygame.error as e:
                 logger.error(f"Error de pygame en actualización de posición: {e}")
                 break

@@ -4,12 +4,22 @@ ConfigManager - Gestión de configuración y persistencia
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 from dataclasses import dataclass, asdict
 
 # Configurar logging
 logger = logging.getLogger(__name__)
+
+# Configurar ubicación de datos del usuario
+if os.name == 'nt':  # Windows
+    app_data = Path(os.environ.get('APPDATA', os.path.expanduser('~'))) / 'MusikPlayer'
+else:  # macOS/Linux
+    app_data = Path(os.path.expanduser('~')) / '.musikplayer'
+
+app_data.mkdir(parents=True, exist_ok=True)
+CONFIG_FILE = app_data / 'musik_config.json'
 
 
 @dataclass
@@ -40,19 +50,17 @@ class AppConfig:
 class ConfigManager:
     """Gestor de configuración de la aplicación"""
     
-    CONFIG_FILE = "musik_config.json"
-    
     def __init__(self, config_dir: Optional[str] = None):
         """
         Inicializa el gestor de configuración
         
         Args:
-            config_dir: Directorio para guardar la configuración (default: directorio actual)
+            config_dir: Directorio para guardar la configuración (default: directorio de datos del usuario)
         """
         if config_dir:
-            self._config_path = Path(config_dir) / self.CONFIG_FILE
+            self._config_path = Path(config_dir) / 'musik_config.json'
         else:
-            self._config_path = Path.cwd() / self.CONFIG_FILE
+            self._config_path = CONFIG_FILE
         
         self._config = AppConfig()
         self._load_config()
@@ -77,15 +85,25 @@ class ConfigManager:
     
     def _save_config(self) -> bool:
         """
-        Guarda la configuración en archivo
+        Guarda la configuración en archivo optimizado con escritura atómica
         
         Returns:
             True si se guardó exitosamente, False en caso contrario
         """
         try:
-            with open(self._config_path, 'w', encoding='utf-8') as f:
+            # Escritura atómica para evitar corrupción
+            import tempfile
+            import shutil
+            
+            # Escribir a archivo temporal primero
+            temp_path = self._config_path.with_suffix('.tmp')
+            with open(temp_path, 'w', encoding='utf-8') as f:
                 json.dump(self._config.to_dict(), f, indent=4)
-            logger.info("Configuración guardada exitosamente")
+            
+            # Mover atómicamente
+            shutil.move(str(temp_path), str(self._config_path))
+            
+            logger.debug("Configuración guardada exitosamente")
             return True
         except Exception as e:
             logger.error(f"Error al guardar configuración: {e}")

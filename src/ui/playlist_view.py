@@ -4,7 +4,8 @@ PlaylistView - Vista de lista de reproducción para Musik Player
 
 import customtkinter as ctk
 from typing import Optional, Callable, List
-from .styles import Styles
+from functools import partial
+from src.ui.styles import Styles
 
 
 class PlaylistView(ctk.CTkFrame):
@@ -61,7 +62,7 @@ class PlaylistView(ctk.CTkFrame):
             **Styles.get_frame_style("secondary")
         )
         self._search_entry.pack(fill="x")
-        self._search_entry.configure(command=self._on_search)
+        # Bind para búsqueda en tiempo real
         self._search_entry.bind("<KeyRelease>", lambda e: self._on_search())
         
         # Scrollable frame para la lista
@@ -188,19 +189,14 @@ class PlaylistView(ctk.CTkFrame):
         )
         remove_btn.grid(row=0, column=3, padx=5, pady=8)
         
-        # Configurar comandos
+        # Configurar comandos con closures correctos
         track_idx = index
-        track_frame.configure(
-            cursor="hand2"
-        )
-        track_frame.bind(
-            "<Button-1>",
-            lambda e, idx=track_idx: self._on_track_click(idx)
-        )
+        track_frame.configure(cursor="hand2")
         
-        remove_btn.configure(
-            command=lambda idx=track_idx: self._on_remove_click(idx)
-        )
+        # Usar functools.partial para evitar problemas de closure
+        from functools import partial
+        track_frame.bind("<Button-1>", partial(self._on_track_click, track_idx))
+        remove_btn.configure(command=partial(self._on_remove_click, track_idx))
         
         # Guardar referencia
         self._track_frames.append(track_frame)

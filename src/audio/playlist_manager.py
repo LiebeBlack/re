@@ -5,12 +5,28 @@ PlaylistManager - Gestión de lista de reproducción
 import logging
 import random
 import json
+import os
 from typing import List, Optional
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-# Configurar logging
 logger = logging.getLogger(__name__)
+
+# Configurar ubicación de datos del usuario
+if os.name == 'nt':  # Windows
+    app_data = Path(os.environ.get('APPDATA', os.path.expanduser('~'))) / 'MusikPlayer'
+else:  # macOS/Linux
+    app_data = Path(os.path.expanduser('~')) / '.musikplayer'
+
+try:
+    app_data.mkdir(parents=True, exist_ok=True)
+except Exception as e:
+    logger.warning(f"No se pudo crear directorio de datos: {e}")
+    import tempfile
+    app_data = Path(tempfile.gettempdir()) / 'MusikPlayer'
+    app_data.mkdir(parents=True, exist_ok=True)
+
+PLAYLIST_FILE = app_data / 'musik_playlist.json'
 
 
 @dataclass
@@ -53,19 +69,17 @@ class Track:
 class PlaylistManager:
     """Clase para gestionar la lista de reproducción"""
     
-    PLAYLIST_FILE = "musik_playlist.json"
-    
     def __init__(self, playlist_dir: Optional[str] = None):
         """
         Inicializa el gestor de playlist
         
         Args:
-            playlist_dir: Directorio para guardar la playlist (default: directorio actual)
+            playlist_dir: Directorio para guardar la playlist (default: usa configuración centralizada)
         """
         if playlist_dir:
-            self._playlist_path = Path(playlist_dir) / self.PLAYLIST_FILE
+            self._playlist_path = Path(playlist_dir) / 'musik_playlist.json'
         else:
-            self._playlist_path = Path.cwd() / self.PLAYLIST_FILE
+            self._playlist_path = PLAYLIST_FILE
         
         self._tracks: List[Track] = []
         self._current_index: int = -1
