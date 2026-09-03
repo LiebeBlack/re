@@ -130,10 +130,18 @@ python build.py
 ### Manual con PyInstaller:
 ```bash
 pip install pyinstaller
-pyinstaller --name=MusikPlayer --windowed --onefile --add-data="src;src" --hidden-import=customtkinter --hidden-import=pygame --hidden-import=mutagen --clean src/main.py
+pyinstaller --name=MusikPlayer --windowed --onedir --add-data="src;src" --hidden-import=customtkinter --hidden-import=pygame --hidden-import=mutagen --clean src/main.py
 ```
 
-El ejecutable se generará en la carpeta `dist/`.
+El ejecutable se generará en la carpeta `dist/MusikPlayer/`.
+
+### Instalador de Windows (NSIS):
+```bash
+python build.py
+makensis installer.nsi
+```
+
+Esto genera `MusikPlayer-Setup.exe` con el instalador que incluye accesos directos, asociaciones de archivos (MP3, WAV, OGG, FLAC) y entrada en Agregar/Quitar programas.
 
 ## Desarrollo
 

@@ -4,7 +4,94 @@
 
 Se ha mejorado significativamente el código para hacerlo más robusto, completo y profesional. Se han agregado múltiples funcionalidades faltantes y se ha preparado el proyecto para release en GitHub.
 
-## Mejoras Recientes (Versión 1.0.0)
+## Mejoras Recientes (Versión 1.1.0)
+
+### 1. Bugs Críticos Corregidos (la app no arrancaba)
+
+#### Clase MainWindow duplicada en main_window.py
+- **Problema**: Existían dos definiciones de `MainWindow`; la segunda (activa) usaba atributos (`_ui_cache`) solo definidos en la primera, provocando `AttributeError` al iniciar.
+- **Solución**: Eliminada la clase muerta y simplificado `_setup_ui()` sin cache innecesaria.
+
+#### Crash al crear los botones de control (font duplicado)
+- **Problema**: `PlayerControls` pasaba `font=` explícito y además `**Styles.get_button_style()` (que ya incluye `font`), lanzando `TypeError: got multiple values for keyword argument 'font'` en cada arranque.
+- **Solución**: Nuevo helper `_button_style()` que fusiona fuente y estilo; aplicado también a los botones de `main_window.py`.
+
+#### Playlist guardada no se mostraba / crash en segunda ejecución
+- **Problema**: `_refresh_playlist_view()` se invocaba antes de crear `_playlist_view` y usaba `winfo_ismapped()` (falso durante el arranque), por lo que la playlist no se renderizaba o crasheaba.
+- **Solución**: La vista se crea antes de cargar la playlist y el refresco ya no depende del mapeo de la ventana.
+
+### 2. Bugs Funcionales Corregidos
+
+#### Siguiente/Anterior no reproducían
+- **Problema**: `_on_next`/`_on_previous` comprobaban el estado *después* de `load()` (que siempre deja el estado en STOPPED), por lo que nunca reanudaban la reproducción al cambiar de pista.
+- **Solución**: Se captura `was_playing` antes de cargar y se reproduce si correspondía.
+
+#### Estado "PLAYING" congelado al terminar la playlist
+- **Problema**: Al acabar la última pista sin Repeat, `next()` devolvía `None` y el reproductor quedaba atascado en PLAYING sin sonido.
+- **Solución**: `_on_next` detiene el reproductor cuando no hay más pistas.
+
+#### Shuffle saltaba la primera pista
+- **Problema**: El primer `next()` en modo shuffle incrementaba el índice y se saltaba el primer elemento del orden aleatorio.
+- **Solución**: La pista actual se coloca al inicio del orden shuffle (índice 0) y `_shuffle_index` refleja la posición de la pista actual, evitando saltos y repeticiones inmediatas.
+
+#### Seek en pausa reproducía la canción
+- **Problema**: `seek()` llamaba a `music.play(start=...)` y solo cambiaba el estado a PAUSED, dejando el audio sonando.
+- **Solución**: Si no estaba sonando, se pausa inmediatamente tras el seek para que el estado coincida con el audio.
+
+#### Progreso congelado tras reanudar (resume)
+- **Problema**: El hilo de actualización de posición salía al pausar y `resume()` no lo reiniciaba.
+- **Solución**: `resume()` reinicia el hilo de posición; `_start_update_thread()` ahora detiene y une hilos previos de forma robusta.
+
+#### Archivos sin duración se descartaban en silencio
+- **Problema**: `duration=None` (sin metadatos) hacía que `Track` rechazara la pista con `ValueError`.
+- **Solución**: La duración se normaliza a `0.0` al crear el Track.
+
+#### Atajos de teclado al escribir en la búsqueda
+- **Problema**: Pulsar `S`, `R`, `L`, espacio, etc. al escribir en el campo de búsqueda activaba atajos globales.
+- **Solución**: Guardián `_guard_shortcut()` que ignora atajos cuando el foco está en un Entry.
+
+### 3. Mejoras de UI y Robustez
+
+#### Comunicación hilo de audio → UI thread-safe
+- **Problema**: El hilo de audio llamaba directamente a `widget.after()`, patrón inseguro en Tkinter que falla cuando el mainloop no está activo.
+- **Solución**: Cola `queue.Queue` + sondeo periódico desde el hilo principal (`_poll_ui_queue`).
+
+#### Barra de progreso sin cortes al arrastrar
+- El seek ya no se dispara en cada tick del slider: al arrastrar solo se muestra la vista previa del tiempo y se busca al soltar (ButtonRelease).
+
+#### Volumen sincronizado y persistente
+- El slider de volumen refleja el volumen guardado al iniciar y guarda con debounce (500 ms) al cambiarlo.
+
+#### Nuevos botones: Limpiar Playlist y Exportar M3U
+- Funcionalidades que existían en `PlaylistManager` pero no tenían interfaz. Ahora con confirmación y diálogos de guardado.
+
+#### Tema aplicado desde configuración
+- El tema guardado en `musik_config.json` se aplica al crear la ventana.
+
+#### Carga de playlist robusta
+- Al cargar se omiten pistas con archivos inexistentes o datos inválidos y se ajusta `current_index` fuera de rango.
+
+### 4. Build y Scripts
+
+- **build.py**: Cambiado `--onefile` por `--onedir` para que el instalador NSIS (`File /r dist\MusikPlayer\*`) funcione con el build local, igual que en CI.
+- **README.md**: Comando manual de PyInstaller actualizado a `--onedir` y añadida sección del instalador NSIS.
+- **GUIA_DEL_PROYECTO.md**: Versión de Python corregida (3.10+, no 3.15).
+
+### 5. Pruebas Automatizadas (nuevas)
+
+- **`tests/`**: Suite de 49 tests unitarios con `unittest` estándar (sin dependencias extra).
+- **Cobertura**: `PlaylistManager` (orden normal/shuffle/repeat, guardado/carga, filtrado de archivos faltantes, exportación M3U), `Track`, `ConfigManager` (persistencia, clamps, JSON corrupto), `FileHandler` y `MetadataExtractor` (fallback).
+- **Verificación funcional**: Arranque de ventana real, carga de WAV, play/pause/resume, next con auto-play, fin de playlist con auto-stop.
+
+### Ejecutar las pruebas
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+---
+
+## Mejoras Anteriores (Versión 1.0.0)
 
 ### 1. Funcionalidades Nuevas
 

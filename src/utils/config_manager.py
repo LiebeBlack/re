@@ -18,7 +18,14 @@ if os.name == 'nt':  # Windows
 else:  # macOS/Linux
     app_data = Path(os.path.expanduser('~')) / '.musikplayer'
 
-app_data.mkdir(parents=True, exist_ok=True)
+try:
+    app_data.mkdir(parents=True, exist_ok=True)
+except Exception as e:
+    logger.warning(f"No se pudo crear directorio de datos, usando temporal: {e}")
+    import tempfile
+    app_data = Path(tempfile.gettempdir()) / 'MusikPlayer'
+    app_data.mkdir(parents=True, exist_ok=True)
+
 CONFIG_FILE = app_data / 'musik_config.json'
 
 

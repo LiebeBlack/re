@@ -30,6 +30,23 @@ class PlayerControls(ctk.CTkFrame):
         
         self._setup_ui()
     
+    @staticmethod
+    def _button_style(style_type: str = "primary", font=None) -> dict:
+        """
+        Retorna el estilo del botón permitiendo sobreescribir la fuente
+        
+        Args:
+            style_type: Tipo de botón (primary, secondary, accent)
+            font: Tupla de fuente opcional
+            
+        Returns:
+            Diccionario con estilos del botón
+        """
+        style = Styles.get_button_style(style_type)
+        if font:
+            style["font"] = font
+        return style
+
     def _setup_ui(self) -> None:
         """Configura la interfaz de los controles"""
         # Frame principal para los botones
@@ -49,8 +66,7 @@ class PlayerControls(ctk.CTkFrame):
             text="◀◀",
             width=60,
             height=50,
-            font=("Segoe UI", 16),
-            **Styles.get_button_style()
+            **self._button_style("primary", ("Segoe UI", 16))
         )
         self._previous_btn.grid(row=0, column=0, padx=5)
         self._previous_btn.configure(command=self._on_previous_click)
@@ -61,8 +77,7 @@ class PlayerControls(ctk.CTkFrame):
             text="▶",
             width=70,
             height=70,
-            font=("Segoe UI", 24),
-            **Styles.get_button_style()
+            **self._button_style("primary", ("Segoe UI", 24))
         )
         self._play_pause_btn.grid(row=0, column=1, padx=5)
         self._play_pause_btn.configure(command=self._on_play_pause_click)
@@ -73,8 +88,7 @@ class PlayerControls(ctk.CTkFrame):
             text="▶▶",
             width=60,
             height=50,
-            font=("Segoe UI", 16),
-            **Styles.get_button_style()
+            **self._button_style("primary", ("Segoe UI", 16))
         )
         self._next_btn.grid(row=0, column=2, padx=5)
         self._next_btn.configure(command=self._on_next_click)
@@ -115,8 +129,7 @@ class PlayerControls(ctk.CTkFrame):
             text="🔀",
             width=50,
             height=35,
-            font=("Segoe UI", 14),
-            **Styles.get_button_style("secondary")
+            **self._button_style("secondary", ("Segoe UI", 14))
         )
         self._shuffle_btn.pack(side="left", padx=5)
         self._shuffle_btn.configure(command=self._on_shuffle_click)
@@ -127,8 +140,7 @@ class PlayerControls(ctk.CTkFrame):
             text="🔁",
             width=50,
             height=35,
-            font=("Segoe UI", 14),
-            **Styles.get_button_style("secondary")
+            **self._button_style("secondary", ("Segoe UI", 14))
         )
         self._repeat_btn.pack(side="left", padx=5)
         self._repeat_btn.configure(command=self._on_repeat_click)

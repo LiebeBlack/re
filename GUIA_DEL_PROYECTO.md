@@ -16,7 +16,7 @@
 
 ### 1.2 Stack Tecnológico
 
-- **Lenguaje**: Python 3.15+
+- **Lenguaje**: Python 3.10+
 - **Interfaz Gráfica**: CustomTkinter (interfaz moderna sobre Tkinter)
 - **Motor de Audio**: pygame (mixer)
 - **Gestión de Metadatos**: mutagen (opcional, para información de canciones)
@@ -91,7 +91,7 @@ musik/
 
 ### 3.1 Requisitos de Sistema
 
-- Python 3.10 o superior
+- Python 3.10 o superior (compatible hasta 3.13+)
 - Windows 10/11, macOS, o Linux
 - 4GB RAM mínimo
 - 100MB espacio en disco

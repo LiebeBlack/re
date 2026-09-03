@@ -305,9 +305,19 @@ class PlaylistManager:
     
     def _generate_shuffle_order(self) -> None:
         """Genera un orden aleatorio de reproducción"""
-        self._shuffled_indices = list(range(len(self._tracks)))
-        random.shuffle(self._shuffled_indices)
-        self._shuffle_index = 0
+        indices = list(range(len(self._tracks)))
+        random.shuffle(indices)
+        
+        # Si hay una pista actual, ponerla al inicio del orden para que
+        # "next" no la vuelva a repetir inmediatamente.
+        if self._current_index >= 0 and self._current_index in indices:
+            indices.remove(self._current_index)
+            indices.insert(0, self._current_index)
+            self._shuffle_index = 0  # La pista actual está en la posición 0
+        else:
+            self._shuffle_index = -1  # "next" empezará en la posición 0
+        
+        self._shuffled_indices = indices
         logger.debug("Orden shuffle generado")
     
     def set_repeat_mode(self, mode: int) -> None:
@@ -403,13 +413,13 @@ class PlaylistManager:
         if not self._shuffled_indices:
             self._generate_shuffle_order()
         
-        self._shuffle_index -= 1
-        
-        if self._shuffle_index < 0:
+        if self._shuffle_index <= 0:
             if self._repeat_mode == 1:  # Repeat all
                 self._shuffle_index = len(self._shuffled_indices) - 1
             else:
                 self._shuffle_index = 0
+        else:
+            self._shuffle_index -= 1
         
         actual_index = self._shuffled_indices[self._shuffle_index]
         self._current_index = actual_index
@@ -464,11 +474,24 @@ class PlaylistManager:
             with open(load_path, 'r', encoding='utf-8') as f:
                 playlist_data = json.load(f)
             
-            # Cargar pistas
-            self._tracks = [Track.from_dict(track_data) for track_data in playlist_data.get("tracks", [])]
+            # Cargar pistas omitiendo las inválidas o cuyos archivos ya no existen
+            tracks = []
+            for track_data in playlist_data.get("tracks", []):
+                try:
+                    track = Track.from_dict(track_data)
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Pista inválida en playlist guardada, omitida: {e}")
+                    continue
+                if track.is_valid():
+                    tracks.append(track)
+                else:
+                    logger.warning(f"Archivo no existe, pista omitida: {track.file_path}")
+            self._tracks = tracks
             
             # Cargar configuración
             self._current_index = playlist_data.get("current_index", -1)
+            if self._current_index >= len(self._tracks):
+                self._current_index = len(self._tracks) - 1 if self._tracks else -1
             self._shuffle = playlist_data.get("shuffle", False)
             self._repeat_mode = playlist_data.get("repeat_mode", 0)
             

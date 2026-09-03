@@ -194,7 +194,6 @@ class PlaylistView(ctk.CTkFrame):
         track_frame.configure(cursor="hand2")
         
         # Usar functools.partial para evitar problemas de closure
-        from functools import partial
         track_frame.bind("<Button-1>", partial(self._on_track_click, track_idx))
         remove_btn.configure(command=partial(self._on_remove_click, track_idx))
         
@@ -299,6 +298,11 @@ class PlaylistView(ctk.CTkFrame):
         """
         self._on_remove_track = callback
     
+    def refresh_search(self) -> None:
+        """Re-aplica el filtro de búsqueda activo tras refrescar la lista"""
+        if self._search_entry.get():
+            self._on_search()
+
     def _on_search(self) -> None:
         """Maneja la búsqueda en la playlist"""
         search_text = self._search_entry.get().lower()

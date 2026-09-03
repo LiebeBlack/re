@@ -39,7 +39,7 @@ def build_executable():
         "pyinstaller",
         "--name=MusikPlayer",
         "--windowed",
-        "--onefile",
+        "--onedir",
         "--icon=assets/icon.ico" if os.path.exists("assets/icon.ico") else "",
         "--add-data=src:src",
         "--hidden-import=customtkinter",
@@ -55,7 +55,8 @@ def build_executable():
     try:
         subprocess.check_call(cmd)
         print("Compilación exitosa!")
-        print("El ejecutable se encuentra en: dist/MusikPlayer.exe")
+        print("El ejecutable se encuentra en: dist/MusikPlayer/MusikPlayer.exe")
+        print("Para crear el instalador: makensis installer.nsi")
     except subprocess.CalledProcessError as e:
         print(f"Error durante la compilación: {e}")
         sys.exit(1)
@@ -69,7 +70,7 @@ def build_mac_app():
         "pyinstaller",
         "--name=MusikPlayer",
         "--windowed",
-        "--onefile",
+        "--onedir",
         "--icon=assets/icon.icns" if os.path.exists("assets/icon.icns") else "",
         "--add-data=src:src",
         "--hidden-import=customtkinter",
@@ -84,7 +85,7 @@ def build_mac_app():
     try:
         subprocess.check_call(cmd)
         print("Compilación exitosa!")
-        print("El ejecutable se encuentra en: dist/MusikPlayer")
+        print("El ejecutable se encuentra en: dist/MusikPlayer/MusikPlayer")
     except subprocess.CalledProcessError as e:
         print(f"Error durante la compilación: {e}")
         sys.exit(1)
@@ -98,7 +99,7 @@ def build_linux_app():
         "pyinstaller",
         "--name=musikplayer",
         "--windowed",
-        "--onefile",
+        "--onedir",
         "--icon=assets/icon.png" if os.path.exists("assets/icon.png") else "",
         "--add-data=src:src",
         "--hidden-import=customtkinter",
@@ -113,7 +114,7 @@ def build_linux_app():
     try:
         subprocess.check_call(cmd)
         print("Compilación exitosa!")
-        print("El ejecutable se encuentra en: dist/musikplayer")
+        print("El ejecutable se encuentra en: dist/musikplayer/musikplayer")
     except subprocess.CalledProcessError as e:
         print(f"Error durante la compilación: {e}")
         sys.exit(1)

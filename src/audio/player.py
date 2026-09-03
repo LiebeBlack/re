@@ -117,6 +117,10 @@ class AudioPlayer:
             logger.warning("Intento de reproducir sin archivo cargado")
             return False
         
+        # No reiniciar la canción si ya está sonando
+        if self._state == PlayerState.PLAYING:
+            return True
+        
         with self._lock:
             try:
                 logger.info("Iniciando reproducción")
@@ -176,6 +180,8 @@ class AudioPlayer:
                 logger.info("Reanudando reproducción")
                 pygame.mixer.music.unpause()
                 self._state = PlayerState.PLAYING
+                # Reiniciar el hilo de posición (salió al pausar)
+                self._start_update_thread()
                 return True
             except pygame.error as e:
                 logger.error(f"Error al reanudar: {e}")
@@ -295,6 +301,9 @@ class AudioPlayer:
                 if was_playing:
                     self._state = PlayerState.PLAYING
                 else:
+                    # Si no estaba sonando, pausar inmediatamente para
+                    # que el estado coincida con la realidad
+                    pygame.mixer.music.pause()
                     self._state = PlayerState.PAUSED
                 
                 return True
@@ -332,9 +341,11 @@ class AudioPlayer:
         self._on_error = callback
     
     def _start_update_thread(self) -> None:
-        """Inicia el hilo de actualización de posición"""
+        """Inicia el hilo de actualización de posición de forma robusta"""
+        # Detener un hilo previo que aún esté vivo para evitar hilos duplicados
         if self._update_thread and self._update_thread.is_alive():
-            return
+            self._is_running = False
+            self._update_thread.join(timeout=0.5)
         
         self._is_running = True
         self._update_thread = threading.Thread(target=self._update_position, daemon=True)
