@@ -361,6 +361,174 @@ class CoverBadge(tk.Canvas):
 
 
 # ---------------------------------------------------------------------------
+# AlbumArt (carátula real o inicial con gradiente)
+# ---------------------------------------------------------------------------
+
+class AlbumArt(tk.Canvas):
+    """
+    Portada del álbum: muestra la carátula embebida (PNG/JPEG vía Pillow)
+    o, si no existe, la inicial con gradiente del tema (CoverBadge).
+    """
+
+    def __init__(self, master, size: int = 76, **kwargs):
+        kwargs.setdefault("highlightthickness", 0)
+        kwargs.setdefault("width", size)
+        kwargs.setdefault("height", size)
+        super().__init__(master, **kwargs)
+        self._size = size
+        self._art_path: Optional[str] = None
+        self._photo = None
+        # Badge de respaldo (widget embebido en el canvas). Se muestra o
+        # se oculta según haya carátula real (los widgets embebidos de un
+        # canvas siempre se dibujan encima de los items, por eso se ocultan).
+        self._badge = CoverBadge(self, size=size, text="♪")
+        self._badge.place(x=0, y=0)
+
+    def set_art(self, image_path: Optional[str], fallback_text: str = "♪") -> None:
+        """
+        Muestra la carátula real o vuelve al badge con la inicial.
+
+        Args:
+            image_path: Ruta de imagen (PNG/JPEG) o None.
+            fallback_text: Texto del badge cuando no hay carátula.
+        """
+        self._art_path = image_path
+        try:
+            self.delete("art")
+        except tk.TclError:
+            pass
+        self._photo = None
+
+        if not image_path:
+            self._badge.set_text(fallback_text or "♪")
+            self._badge.place(x=0, y=0)
+            return
+
+        try:
+            from PIL import Image, ImageTk
+            with Image.open(image_path) as img:
+                img = img.convert("RGB")
+                img.thumbnail((self._size, self._size), Image.LANCZOS)
+                self._photo = ImageTk.PhotoImage(img)
+            self._badge.place_forget()
+            self.create_image(self._size // 2, self._size // 2,
+                              image=self._photo, anchor="center", tags="art")
+        except Exception:
+            # Imagen inválida: volver al badge
+            self._badge.set_text(fallback_text or "♪")
+            self._badge.place(x=0, y=0)
+
+    def get_art_path(self) -> Optional[str]:
+        return self._art_path
+
+
+# ---------------------------------------------------------------------------
+# WaveformView (forma de onda de la pista + cabezal de reproducción)
+# ---------------------------------------------------------------------------
+
+class WaveformView(tk.Canvas):
+    """
+    Dibuja la envolvente (picos min/max) de la pista decodificada en modo HQ
+    con un gradiente del tema y un cabezal de reproducción en vivo.
+    Todo se dibuja con un único polígono + línea (muy barato en la GPU).
+    """
+
+    def __init__(self, master, height: int = 40, bg: Optional[str] = None, **kwargs):
+        kwargs.setdefault("highlightthickness", 0)
+        kwargs.setdefault("height", height)
+        super().__init__(master, bg=bg or Styles.SECONDARY_COLOR, **kwargs)
+        self._mins: Optional[list] = None
+        self._maxs: Optional[list] = None
+        self._playhead = -1.0  # fracción 0..1 (o -1 sin cabezal)
+        self.bind("<Configure>", lambda e: self.redraw())
+
+    def set_waveform(self, mins, maxs) -> None:
+        """
+        Define los picos de la forma de onda (arrays/lista del mismo tamaño).
+
+        Args:
+            mins: Valores negativos de envolvente (0..-1).
+            maxs: Valores positivos de envolvente (0..1).
+        """
+        self._mins = list(mins)
+        self._maxs = list(maxs)
+        self.redraw()
+
+    def set_playhead(self, fraction: float) -> None:
+        """
+        Mueve el cabezal de reproducción.
+
+        Args:
+            fraction: Posición relativa 0..1 (o -1 para ocultarlo).
+        """
+        fraction = max(-1.0, min(1.0, fraction))
+        if abs(fraction - self._playhead) < 0.004:
+            return
+        self._playhead = fraction
+        self.redraw()
+
+    def clear(self) -> None:
+        """Vacía la forma de onda."""
+        self._mins = None
+        self._maxs = None
+        self._playhead = -1.0
+        self.redraw()
+
+    def redraw(self) -> None:
+        """Redibuja la onda y el cabezal al tamaño actual."""
+        try:
+            self.delete("all")
+        except tk.TclError:
+            return
+        width = self.winfo_width()
+        height = self.winfo_height()
+        if width <= 2 or height <= 2:
+            return
+
+        mid = height / 2.0
+        amp = max(3.0, mid - 2.0)
+
+        if self._mins is None or self._maxs is None:
+            # Sin datos: línea base sutil
+            self.create_line(0, mid, width, mid, fill=Styles.BORDER_COLOR, width=1)
+            return
+
+        n = len(self._maxs)
+        if n == 0:
+            return
+
+        color_a = Styles.ACCENT_COLOR
+        color_b = Styles.GLOW_COLOR
+
+        # Construir el polígono de la envolvente (cima + fondo invertido)
+        points = []
+        for i in range(n):
+            x = width * i / (n - 1)
+            y = mid - float(self._maxs[i]) * amp
+            points.append((x, y))
+        for i in range(n - 1, -1, -1):
+            x = width * i / (n - 1)
+            y = mid - float(self._mins[i]) * amp
+            points.append((x, y))
+
+        flat = [c for pt in points for c in pt]
+        # Gradiente simulado: polígono de color + sombra glow inferior
+        self.create_polygon(flat, fill=blend_colors(Styles.SECONDARY_COLOR, color_a, 0.35),
+                            outline="")
+        # Línea de pico superior en gradiente (glow)
+        line_pts = []
+        for i in range(n):
+            x = width * i / (n - 1)
+            line_pts.extend((x, mid - float(self._maxs[i]) * amp))
+        self.create_line(*line_pts, fill=blend_colors(color_a, color_b, 0.5), width=1.5)
+
+        # Cabezal de reproducción
+        if self._playhead >= 0:
+            x = self._playhead * width
+            self.create_line(x, 2, x, height - 2, fill=Styles.TEXT_COLOR, width=2)
+
+
+# ---------------------------------------------------------------------------
 # EllipsisLabel (texto que se trunca con "…")
 # ---------------------------------------------------------------------------
 

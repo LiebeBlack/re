@@ -211,6 +211,52 @@ class Theme:
         "error": "#f87171",
     }
 
+    # --- Slate (grafito frío, minimal) ----------------------------------------
+    SLATE = {
+        "name": "slate",
+        "primary": "#0b0f14",
+        "secondary": "#131a22",
+        "card": "#18212b",
+        "accent": "#38bdf8",
+        "accent_hover": "#7dd3fc",
+        "glow": "#a5b4fc",
+        "gradient_a": "#0ea5e9",
+        "gradient_b": "#a5b4fc",
+        "text": "#e2e8f0",
+        "text_secondary": "#8ea0b4",
+        "button": "#1e2a38",
+        "button_hover": "#2a3a4e",
+        "progress": "#38bdf8",
+        "progress_bg": "#1e2a38",
+        "border": "#243140",
+        "success": "#34d399",
+        "warning": "#fbbf24",
+        "error": "#f87171",
+    }
+
+    # --- Ruby (carmesí profundo) ----------------------------------------------
+    RUBY = {
+        "name": "ruby",
+        "primary": "#170a0e",
+        "secondary": "#241016",
+        "card": "#2e1520",
+        "accent": "#f43f5e",
+        "accent_hover": "#fb7185",
+        "glow": "#f59e0b",
+        "gradient_a": "#e11d48",
+        "gradient_b": "#f97316",
+        "text": "#fff1f2",
+        "text_secondary": "#d3a0ac",
+        "button": "#3b1b26",
+        "button_hover": "#4f2432",
+        "progress": "#f43f5e",
+        "progress_bg": "#3b1b26",
+        "border": "#4c2230",
+        "success": "#34d399",
+        "warning": "#fbbf24",
+        "error": "#f87171",
+    }
+
     # --- Light (claro, minimalista) ------------------------------------------
     LIGHT = {
         "name": "light",
@@ -245,6 +291,8 @@ class Theme:
         "🌌 Aurora": "dark_purple",
         "🌅 Sunset": "sunset",
         "🍀 Emerald": "emerald",
+        "🪨 Slate": "slate",
+        "💎 Ruby": "ruby",
         "☀️ Light": "light",
     }
 
@@ -265,6 +313,8 @@ class Theme:
             "dark_purple": cls.DARK_PURPLE,
             "sunset": cls.SUNSET,
             "emerald": cls.EMERALD,
+            "slate": cls.SLATE,
+            "ruby": cls.RUBY,
             "light": cls.LIGHT,
         }
         return themes.get(theme_name, cls.DARK_PREMIUM)
@@ -321,13 +371,13 @@ class Styles:
     MIN_WIDTH = 720
     MIN_HEIGHT = 560
 
-    # Fuentes
+    # Fuentes (diseño compacto ~13%: menos cuerpo, más aire)
     FONT_FAMILY = "Segoe UI"
-    TITLE_FONT = (FONT_FAMILY, 26, "bold")
-    SUBTITLE_FONT = (FONT_FAMILY, 17, "bold")
-    NORMAL_FONT = (FONT_FAMILY, 13)
-    SMALL_FONT = (FONT_FAMILY, 11)
-    MONO_FONT = ("Consolas", 12, "bold")
+    TITLE_FONT = (FONT_FAMILY, 22, "bold")
+    SUBTITLE_FONT = (FONT_FAMILY, 15, "bold")
+    NORMAL_FONT = (FONT_FAMILY, 12)
+    SMALL_FONT = (FONT_FAMILY, 10)
+    MONO_FONT = ("Consolas", 11, "bold")
 
     @classmethod
     def set_theme(cls, theme_name: str) -> None:

@@ -14,7 +14,21 @@ logger = logging.getLogger(__name__)
 class FileHandler:
     """Clase para manejar operaciones de archivos y directorios"""
     
-    SUPPORTED_FORMATS = {'.mp3', '.wav', '.ogg', '.flac'}
+    # Formatos admitidos: los decodifican pygame/SDL, soundfile o mutagen
+    SUPPORTED_FORMATS = {
+        '.mp3', '.wav', '.ogg', '.flac',          # básicos / lossless
+        '.m4a', '.mp4', '.aac',                   # AAC / ALAC (contenedor MP4)
+        '.opus', '.aif', '.aiff',                 # Opus / AIFF
+    }
+
+    # Etiquetas para los diálogos de archivo
+    FILE_DIALOG_PATTERNS = [
+        ("Archivos de audio", "*.mp3 *.wav *.ogg *.flac *.m4a *.mp4 *.aac *.opus *.aif *.aiff"),
+        ("Audio sin pérdida", "*.flac *.wav *.m4a *.aif *.aiff"),
+        ("MP3", "*.mp3"), ("WAV", "*.wav"), ("FLAC", "*.flac"),
+        ("OGG", "*.ogg"), ("AAC / M4A", "*.m4a *.mp4 *.aac"), ("OPUS", "*.opus"),
+        ("Todos los archivos", "*.*"),
+    ]
     
     @staticmethod
     def is_audio_file(file_path: str) -> bool:

@@ -25,6 +25,14 @@ os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 from src.audio.player import AudioPlayer, PlayerState
 from src.audio.playlist_manager import PlaylistManager, Track
 
+# Dependencias opcionales del motor HQ (decode + EQ)
+try:
+    import numpy as np  # noqa: F401
+    import soundfile as sf  # noqa: F401
+    HAVE_HQ_DEPS = True
+except Exception:
+    HAVE_HQ_DEPS = False
+
 
 def make_wav(path: Path, seconds: float = 1.0, frequency: int = 440, rate: int = 44100) -> None:
     """Genera un WAV mono de N segundos con un tono senoidal."""
@@ -182,6 +190,123 @@ class TestAudioPlayer(unittest.TestCase):
         self.assertAlmostEqual(self._player.get_volume(), 0.0)
         self._player.set_volume(0.35)
         self.assertAlmostEqual(self._player.get_volume(), 0.35)
+
+
+@unittest.skipUnless(HAVE_HQ_DEPS, "numpy/soundfile no instalados")
+class TestAudioPlayerHq(unittest.TestCase):
+    """Pruebas del backend HQ/DSP (decode + EQ + normalización)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls._tmp = tempfile.TemporaryDirectory()
+        cls.tmp_dir = Path(cls._tmp.name)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls._tmp.cleanup()
+
+    def setUp(self):
+        # FLAC 24-bit de 2 s con EQ y normalización de pico
+        path = self.tmp_dir / "hq_track.flac"
+        sr = 48000
+        t = np.arange(sr * 2) / sr
+        mono = 0.4 * np.sin(2 * np.pi * 440 * t)
+        sf.write(str(path), np.stack([mono, mono], axis=1).astype(np.float32),
+                 sr, subtype="PCM_24")
+        self.path = str(path)
+
+    def _player(self, **overrides):
+        settings = {
+            "hq_engine": True,
+            "eq_enabled": True,
+            "eq_gains": [3, 2, 1, 0, 0, 0, 0, 0, 0, 0],
+            "eq_preamp": -2.0,
+            "normalization": "peak",
+            "sample_rate": 48000,
+            "buffer_size": 2048,
+        }
+        settings.update(overrides)
+        return AudioPlayer(settings=settings)
+
+    def _wait_ready(self, player, timeout=8.0):
+        ready = threading.Event()
+        player.set_track_ready_callback(ready.set)
+        t0 = time.time()
+        while not ready.is_set() and time.time() - t0 < timeout:
+            time.sleep(0.02)
+        return ready.is_set()
+
+    def test_hq_load_decode_and_accept(self):
+        player = self._player()
+        try:
+            self.assertTrue(player.load(self.path, duration_hint=2.0))
+            self.assertEqual(player.get_state(), PlayerState.LOADING)
+            self.assertTrue(self._wait_ready(player))
+            self.assertTrue(player.hq_buffer_ready())
+            self.assertTrue(player.accept_hq_buffer())
+            self.assertTrue(player.is_hq())
+            self.assertAlmostEqual(player.get_duration(), 2.0, delta=0.1)
+        finally:
+            player.cleanup()
+
+    def test_hq_play_seek_pause_end(self):
+        player = self._player()
+        try:
+            player.load(self.path, duration_hint=2.0)
+            self.assertTrue(self._wait_ready(player))
+            self.assertTrue(player.accept_hq_buffer())
+
+            self.assertTrue(player.play())
+            time.sleep(0.4)
+            self.assertGreater(player.get_position(), 0.2)
+
+            # Seek respetando el offset
+            self.assertTrue(player.seek(1.0))
+            time.sleep(0.35)
+            self.assertGreaterEqual(player.get_position(), 1.0)
+
+            # Pausa congela la posición
+            player.pause()
+            time.sleep(0.15)
+            frozen = player.get_position()
+            time.sleep(0.3)
+            self.assertAlmostEqual(player.get_position(), frozen, delta=0.1)
+            self.assertTrue(player.resume())
+
+            # Fin de pista detectado
+            ended = threading.Event()
+            player.set_track_end_callback(ended.set)
+            player.seek(1.6)
+            self.assertTrue(ended.wait(timeout=4.0))
+        finally:
+            player.cleanup()
+
+    def test_hq_falls_back_to_stream_if_disabled(self):
+        player = self._player(hq_engine=False)
+        try:
+            player.load(self.path, duration_hint=2.0)
+            self.assertFalse(player.is_hq())
+            self.assertEqual(player.get_backend(), "stream")
+        finally:
+            player.cleanup()
+
+    def test_update_dsp_settings_reprocesses(self):
+        player = self._player()
+        try:
+            player.load(self.path, duration_hint=2.0)
+            self.assertTrue(self._wait_ready(player))
+            self.assertTrue(player.accept_hq_buffer())
+            self.assertTrue(player.play())
+            time.sleep(0.3)
+
+            # Cambiar ganancias -> reprocesa la pista (decode de nuevo)
+            player.update_dsp_settings({"eq_gains": [6, 6, 4, 0, 0, 0, 0, 0, 0, 0]})
+            self.assertEqual(player.get_state(), PlayerState.LOADING)
+            self.assertTrue(self._wait_ready(player))
+            self.assertTrue(player.hq_buffer_ready())
+            self.assertTrue(player.accept_hq_buffer())
+        finally:
+            player.cleanup()
 
 
 class TestPlaylistShuffleRegressions(unittest.TestCase):

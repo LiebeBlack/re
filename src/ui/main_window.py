@@ -1,128 +1,142 @@
 """
-MainWindow - Ventana principal ultra moderna de Musik Player.
+MainWindow - Ventana principal del reproductor de audio avanzado.
 
-Características del rediseño:
-  * Layout responsivo por grid (la playlist se expande, todo se adapta).
-  * Header con selector de temas (cambio en vivo sin reiniciar).
-  * Tarjeta "Now Playing" con portada (CoverBadge), visualizador animado
-    y tiempos grandes en tipografía mono.
-  * Barra de estado con estado de reproducción, conteo y duración total.
-  * Modo compacto automático al reducir la ventana (responsividad).
-  * Atajo T para ciclar entre temas.
+Integra:
+  * Motor dual (streaming / HQ-DSP) con decode en hilo secundario.
+  * Carátula de álbum real (embebida) con fallback a inicial con gradiente.
+  * Chips de metadatos técnicos (formato, bitrate, kHz, canales, bits).
+  * Forma de onda de la pista en modo HQ + cabezal de reproducción.
+  * Panel de ecualizador de 10 bandas (desplegable, compacto).
+  * Configuración de salida (driver WASAPI/ALSA/Pulse, buffer, rate, HQ).
+  * Layout responsivo compacto, temas en vivo, barra de estado.
 """
 
-import customtkinter as ctk
-import tkinter as tk
-from tkinter import filedialog, messagebox
-from typing import Optional
 import logging
 import queue
+import threading
 import time
+import tkinter as tk
+from tkinter import filedialog, messagebox
+from typing import Dict, Optional
 
-from src.ui.styles import Styles, Theme
-from src.ui.player_controls import PlayerControls
-from src.ui.playlist_view import PlaylistView
-from src.ui.widgets import Visualizer, CoverBadge, EllipsisLabel, Tooltip
+import customtkinter as ctk
+
 from src.audio.player import AudioPlayer, PlayerState
 from src.audio.playlist_manager import PlaylistManager, Track
-from src.utils.file_handler import FileHandler
+from src.ui.audio_panel import AudioSettingsPopup, EqPanel, MetaChips
+from src.ui.player_controls import PlayerControls
+from src.ui.playlist_view import PlaylistView
+from src.ui.styles import Styles, Theme
+from src.ui.widgets import AlbumArt, EllipsisLabel, Tooltip, Visualizer, WaveformView
 from src.utils.config_manager import ConfigManager
+from src.utils.file_handler import FileHandler
 from src.utils.metadata_extractor import MetadataExtractor
 
 logger = logging.getLogger(__name__)
 
-# Umbral de ancho para activar el modo compacto (responsividad)
-COMPACT_WIDTH = 840
+# Umbral de ancho para el modo compacto (responsividad)
+COMPACT_WIDTH = 860
 
 
 class MainWindow(ctk.CTk):
-    """Ventana principal del reproductor de música."""
+    """Ventana principal del reproductor."""
 
     def __init__(self):
-        """Inicializa la ventana principal."""
         super().__init__()
 
         # Configurar tema guardado antes de crear widgets
         self._config_manager = ConfigManager()
         Styles.setup_theme(self._config_manager.get_theme())
 
-        # Configurar ventana
-        self.title("Musik Player")
+        self.title("Musik Player — Hi-Res Audio")
         self.configure(fg_color=Styles.PRIMARY_COLOR)
 
-        # Inicializar componentes
-        self._audio_player = AudioPlayer()
+        # Crear el motor con la configuración guardada
+        cfg = self._config_manager
+        self._audio_player = AudioPlayer(settings=self._player_settings_from_config())
         self._playlist_manager = PlaylistManager()
+        self._playlist_manager.set_shuffle(cfg.get_shuffle())
+        self._playlist_manager.set_repeat_mode(cfg.get_repeat_mode())
 
-        # Cargar configuración de shuffle/repeat
-        self._playlist_manager.set_shuffle(self._config_manager.get_shuffle())
-        self._playlist_manager.set_repeat_mode(self._config_manager.get_repeat_mode())
-
-        # Cargar geometría desde configuración
-        width, height, x, y = self._config_manager.get_window_geometry()
+        width, height, x, y = cfg.get_window_geometry()
         self.geometry(f"{width}x{height}+{x}+{y}")
         self.minsize(Styles.MIN_WIDTH, Styles.MIN_HEIGHT)
 
-        # Cargar volumen desde configuración
-        self._previous_volume = self._config_manager.get_volume()
+        self._previous_volume = cfg.get_volume()
         self._audio_player.set_volume(self._previous_volume)
 
-        # Configurar callbacks del reproductor
+        # Callbacks del motor
         self._audio_player.set_position_callback(self._on_position_update)
         self._audio_player.set_track_end_callback(self._on_track_end)
         self._audio_player.set_error_callback(self._on_audio_error)
+        self._audio_player.set_track_ready_callback(self._on_hq_track_ready)
 
-        # Variables de UI
+        # Estado de UI
         self._current_position = 0.0
         self._total_duration = 0.0
         self._is_seeking = False
-        self._is_shuffle = self._config_manager.get_shuffle()
-        self._repeat_mode = self._config_manager.get_repeat_mode()  # 0: off, 1: all, 2: one
+        self._is_shuffle = cfg.get_shuffle()
+        self._repeat_mode = cfg.get_repeat_mode()
         self._volume_save_job: Optional[str] = None
         self._compact = False
-        # Throttle del redibujado de la barra de progreso (evita saturar
-        # la UI: el CTkSlider redibuja todo el widget en cada set()).
         self._last_progress_ui_time = 0.0
-        self._progress_ui_interval = 0.15  # ~7 actualizaciones/segundo
+        self._progress_ui_interval = 0.15
 
-        # Cola thread-safe para comunicar eventos del hilo de audio a la UI.
-        # El sondeo se programa una sola vez aquí (hilo principal) y se
-        # re-programa a sí mismo, de modo que el hilo de audio nunca toca Tk.
+        # Cachés de metadatos/carátulas/análisis por ruta
+        self._meta_cache: Dict[str, dict] = {}
+        self._art_cache: Dict[str, Optional[str]] = {}
+        self._analysis: Optional[dict] = None
+        self._current_meta: dict = {}
+
+        # Cola thread-safe hilo de audio -> UI
         self._ui_queue = queue.Queue()
         self.after(50, self._poll_ui_queue)
 
-        # Construir interfaz (antes de cargar la playlist para que la vista exista)
         self._build_ui()
         self._setup_callbacks()
         self._setup_keyboard_shortcuts()
-
-        # Responsividad: adaptar layout al redimensionar
         self.bind("<Configure>", self._on_window_resize)
 
-        # Cargar playlist guardada
         self._load_saved_playlist()
 
-        # Estado inicial
         self._player_controls.set_volume(self._audio_player.get_volume())
         self._player_controls.set_shuffle_state(self._is_shuffle)
         self._player_controls.set_repeat_state(self._repeat_mode)
+        self._sync_eq_panel_from_config()
         self._update_ui_state()
 
         logger.info("Ventana principal inicializada")
 
     # ------------------------------------------------------------------
-    # Construcción de la UI
+    # Configuración del motor
+    # ------------------------------------------------------------------
+
+    def _player_settings_from_config(self) -> Dict:
+        cfg = self._config_manager
+        return {
+            "audio_driver": cfg.get_audio_driver(),
+            "sample_rate": cfg.get_sample_rate(),
+            "buffer_size": cfg.get_buffer_size(),
+            "output_depth": cfg.get_output_depth(),
+            "hq_engine": cfg.get_hq_engine(),
+            "eq_enabled": cfg.get_eq_enabled(),
+            "eq_preamp": cfg.get_eq_preamp(),
+            "eq_gains": cfg.get_eq_gains(),
+            "eq_hp_filter": cfg.get_eq_hp_filter(),
+            "normalization": cfg.get_normalization(),
+        }
+
+    # ------------------------------------------------------------------
+    # Construcción UI (layout compacto)
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
-        """(Re)construye toda la interfaz. Usado al iniciar y al cambiar de tema."""
-        # Detener animaciones que referencien widgets viejos antes de destruirlos
+        """(Re)construye la interfaz. Usado al iniciar y al cambiar de tema."""
         if hasattr(self, "_player_controls"):
             try:
                 self._player_controls.stop_animations()
             except Exception:
                 pass
-
         if hasattr(self, "_main_frame"):
             try:
                 if self._main_frame.winfo_exists():
@@ -132,228 +146,190 @@ class MainWindow(ctk.CTk):
 
         self._main_frame = ctk.CTkFrame(self, fg_color=Styles.PRIMARY_COLOR)
         self._main_frame.pack(fill="both", expand=True)
-
-        # Grid responsivo: la fila de la playlist (5) se expande
         self._main_frame.grid_columnconfigure(0, weight=1)
-        self._main_frame.grid_rowconfigure(5, weight=1)
+        self._main_frame.grid_rowconfigure(6, weight=1)  # playlist expande
 
-        self._build_header()
-        self._build_now_playing()
-        self._build_progress()
-        self._build_controls()
-        self._build_actions()
-        self._build_playlist()
-        self._build_status_bar()
+        self._build_header()        # fila 0
+        self._build_now_playing()   # fila 1
+        self._build_progress()      # fila 2
+        self._build_controls()      # fila 3
+        self._build_eq_panel()      # fila 4 (oculto por defecto)
+        self._build_actions()       # fila 5
+        self._build_playlist()      # fila 6 (expandible)
+        self._build_status_bar()    # fila 7
 
     def _build_header(self) -> None:
-        """Header: marca + selector de temas."""
         header = ctk.CTkFrame(self._main_frame, fg_color="transparent")
-        header.grid(row=0, column=0, sticky="ew", padx=20, pady=(14, 4))
+        header.grid(row=0, column=0, sticky="ew", padx=14, pady=(10, 2))
 
-        brand = ctk.CTkLabel(
-            header,
-            text="🎵 Musik Player",
-            font=Styles.TITLE_FONT,
-            text_color=Styles.TEXT_COLOR,
-        )
+        brand = ctk.CTkLabel(header, text="🎵 Musik Player", font=Styles.TITLE_FONT,
+                             text_color=Styles.TEXT_COLOR)
         brand.pack(side="left")
 
-        # Selector de tema (cambio en vivo)
+        # Selector de tema
         display_names = list(Theme.get_display_names().keys())
         self._theme_menu = ctk.CTkOptionMenu(
-            header,
-            values=display_names,
-            command=self._on_theme_change,
-            width=180,
-            font=Styles.SMALL_FONT,
-            fg_color=Styles.BUTTON_COLOR,
-            button_color=Styles.ACCENT_COLOR,
-            button_hover_color=Styles.ACCENT_HOVER,
-            text_color=Styles.TEXT_COLOR,
+            header, values=display_names, command=self._on_theme_change,
+            width=150, font=Styles.SMALL_FONT, height=26,
+            fg_color=Styles.BUTTON_COLOR, button_color=Styles.ACCENT_COLOR,
+            button_hover_color=Styles.ACCENT_HOVER, text_color=Styles.TEXT_COLOR,
             dropdown_fg_color=Styles.SECONDARY_COLOR,
             dropdown_hover_color=Styles.BUTTON_COLOR,
-            dropdown_text_color=Styles.TEXT_COLOR,
-            corner_radius=10,
-        )
+            dropdown_text_color=Styles.TEXT_COLOR, corner_radius=8)
         self._theme_menu.pack(side="right")
-        Tooltip(self._theme_menu, "Cambiar tema de la aplicación  (T)")
+        Tooltip(self._theme_menu, "Cambiar tema  (T)")
         self._theme_menu.set(self._display_name_for_theme(Styles.get_current_theme()))
 
+        self._eq_toggle_btn = ctk.CTkButton(
+            header, text="🎛 EQ", width=46, height=26, font=Styles.SMALL_FONT,
+            fg_color=Styles.BUTTON_COLOR, hover_color=Styles.BUTTON_HOVER,
+            text_color=Styles.TEXT_COLOR, corner_radius=8, command=self._toggle_eq_panel)
+        self._eq_toggle_btn.pack(side="right", padx=(0, 6))
+        Tooltip(self._eq_toggle_btn, "Mostrar / ocultar ecualizador")
+
+        self._settings_btn = ctk.CTkButton(
+            header, text="⚙ Audio", width=58, height=26, font=Styles.SMALL_FONT,
+            fg_color=Styles.BUTTON_COLOR, hover_color=Styles.BUTTON_HOVER,
+            text_color=Styles.TEXT_COLOR, corner_radius=8,
+            command=self._open_audio_settings)
+        self._settings_btn.pack(side="right", padx=(0, 2))
+        Tooltip(self._settings_btn, "Configuración de salida y calidad")
+
     def _build_now_playing(self) -> None:
-        """Tarjeta Now Playing: portada + info + visualizador + tiempo."""
         card = ctk.CTkFrame(self._main_frame, **Styles.get_frame_style("card"))
-        card.grid(row=1, column=0, sticky="ew", padx=20, pady=(6, 8))
+        card.grid(row=1, column=0, sticky="ew", padx=14, pady=(4, 6))
         card.grid_columnconfigure(1, weight=1)
 
-        # Portada con la inicial de la pista
-        self._cover_badge = CoverBadge(card, size=72, text="♪")
-        self._cover_badge.grid(row=0, column=0, rowspan=2, padx=(16, 14), pady=12)
+        # Portada (carátula real o inicial)
+        self._album_art = AlbumArt(card, size=64)
+        self._album_art.grid(row=0, column=0, rowspan=2, padx=(12, 10), pady=10)
 
-        # Columna de información
+        # Info + chips
         info = ctk.CTkFrame(card, fg_color="transparent")
-        info.grid(row=0, column=1, sticky="ew", pady=(12, 2), padx=(0, 10))
+        info.grid(row=0, column=1, sticky="ew", pady=(8, 0), padx=(0, 8))
 
         self._song_title_label = EllipsisLabel(
-            info,
-            text="No track loaded",
-            font=Styles.SUBTITLE_FONT,
-            text_color=Styles.TEXT_COLOR,
-        )
+            info, text="No track loaded", font=Styles.SUBTITLE_FONT,
+            text_color=Styles.TEXT_COLOR)
         self._song_title_label.pack(fill="x")
 
         self._artist_label = EllipsisLabel(
-            info,
-            text="-",
-            font=Styles.NORMAL_FONT,
-            text_color=Styles.TEXT_SECONDARY,
-        )
-        self._artist_label.pack(fill="x", pady=(2, 0))
+            info, text="-", font=Styles.NORMAL_FONT,
+            text_color=Styles.TEXT_SECONDARY)
+        self._artist_label.pack(fill="x")
 
-        # Ecualizador animado
-        self._visualizer = Visualizer(card, bars=26, height=34, bg=Styles.CARD_COLOR)
-        self._visualizer.grid(row=1, column=1, sticky="ew", padx=(14, 16), pady=(2, 12))
+        self._meta_chips = MetaChips(info)
+        self._meta_chips.pack(fill="x", pady=(3, 0))
 
-        # Tiempos grandes (columna derecha)
+        # Tiempos
         time_col = ctk.CTkFrame(card, fg_color="transparent")
-        time_col.grid(row=0, column=2, rowspan=2, padx=14, sticky="e")
+        time_col.grid(row=0, column=2, rowspan=2, padx=10, sticky="e")
 
         self._time_label = ctk.CTkLabel(
-            time_col,
-            text="00:00",
-            font=("Consolas", 24, "bold"),
-            text_color=Styles.ACCENT_COLOR,
-        )
+            time_col, text="00:00", font=("Consolas", 20, "bold"),
+            text_color=Styles.ACCENT_COLOR)
         self._time_label.pack(anchor="e")
-
         self._total_time_label = ctk.CTkLabel(
-            time_col,
-            text="/ 00:00",
-            font=Styles.MONO_FONT,
-            text_color=Styles.TEXT_SECONDARY,
-        )
+            time_col, text="/ 00:00", font=Styles.MONO_FONT,
+            text_color=Styles.TEXT_SECONDARY)
         self._total_time_label.pack(anchor="e")
 
+        # Zona visual: barras animadas (default) u onda HQ (encima)
+        viz_frame = ctk.CTkFrame(card, fg_color="transparent")
+        viz_frame.grid(row=1, column=1, columnspan=2, sticky="ew",
+                       padx=(12, 14), pady=(2, 10))
+        viz_frame.grid_columnconfigure(0, weight=1)
+
+        self._visualizer = Visualizer(viz_frame, bars=18, height=30, bg=Styles.CARD_COLOR)
+        self._visualizer.grid(row=0, column=0, sticky="ew")
+
+        self._waveform = WaveformView(viz_frame, height=30, bg=Styles.CARD_COLOR)
+        self._waveform.grid(row=0, column=0, sticky="ew")
+
     def _build_progress(self) -> None:
-        """Barra de progreso de la pista actual."""
-        progress_frame = ctk.CTkFrame(self._main_frame, fg_color="transparent")
-        progress_frame.grid(row=2, column=0, sticky="ew", padx=20, pady=(2, 2))
+        frame = ctk.CTkFrame(self._main_frame, fg_color="transparent")
+        frame.grid(row=2, column=0, sticky="ew", padx=14, pady=(0, 0))
 
         self._progress_slider = ctk.CTkSlider(
-            progress_frame,
-            from_=0,
-            to=100,
-            number_of_steps=1000,
-            **Styles.get_progress_style(),
-        )
-        self._progress_slider.pack(fill="x", pady=2)
+            frame, from_=0, to=100, number_of_steps=1000, height=12,
+            **Styles.get_progress_style())
+        self._progress_slider.pack(fill="x", pady=1)
         self._progress_slider.configure(command=self._on_progress_change)
-        # Buscar solo al soltar el slider para evitar cortes de audio
         self._progress_slider.bind("<ButtonPress-1>", self._on_progress_press)
         self._progress_slider.bind("<ButtonRelease-1>", self._on_progress_release)
-        Tooltip(self._progress_slider, "Arrastrar y soltar para buscar  (Ctrl+← / Ctrl+→)")
+        Tooltip(self._progress_slider, "Arrastrar y soltar para buscar  (Ctrl+←/→)")
 
     def _build_controls(self) -> None:
-        """Controles de reproducción (play, next, volumen, modos)."""
         self._player_controls = PlayerControls(self._main_frame)
-        self._player_controls.grid(row=3, column=0, sticky="ew", padx=20, pady=(2, 2))
+        self._player_controls.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 0))
+
+    def _build_eq_panel(self) -> None:
+        """Panel EQ colapsable (oculto hasta pulsar el botón EQ)."""
+        self._eq_panel = EqPanel(
+            self._main_frame,
+            presets=self._config_manager.get_eq_presets(),
+            on_change=self._on_eq_change,
+        )
+        self._eq_panel.grid(row=4, column=0, sticky="ew", padx=14, pady=(2, 4))
+        self._eq_panel.grid_remove()
 
     def _build_actions(self) -> None:
-        """Filas de acciones: cargar, limpiar, exportar (grid equilibrado)."""
         actions = ctk.CTkFrame(self._main_frame, fg_color="transparent")
-        actions.grid(row=4, column=0, sticky="ew", padx=20, pady=6)
+        actions.grid(row=5, column=0, sticky="ew", padx=14, pady=4)
         for col in range(3):
             actions.grid_columnconfigure(col, weight=1)
 
         self._action_buttons = []
-
-        load_btn = ctk.CTkButton(
-            actions,
-            text="📁 Cargar Audio",
-            height=36,
-            **Styles.get_button_style("accent"),
-        )
-        load_btn.grid(row=0, column=0, padx=(0, 5), sticky="ew")
-        load_btn.configure(command=self._on_load_files)
-        Tooltip(load_btn, "Agregar archivos de audio  (L)")
-        self._action_buttons.append((load_btn, "📁 Cargar Audio", "📁 Cargar"))
-
-        clear_btn = ctk.CTkButton(
-            actions,
-            text="🗑 Limpiar Playlist",
-            height=36,
-            **Styles.get_button_style("secondary"),
-        )
-        clear_btn.grid(row=0, column=1, padx=5, sticky="ew")
-        clear_btn.configure(command=self._on_clear_playlist)
-        Tooltip(clear_btn, "Vaciar toda la playlist")
-        self._action_buttons.append((clear_btn, "🗑 Limpiar Playlist", "🗑 Limpiar"))
-
-        export_btn = ctk.CTkButton(
-            actions,
-            text="📤 Exportar M3U",
-            height=36,
-            **Styles.get_button_style("secondary"),
-        )
-        export_btn.grid(row=0, column=2, padx=(5, 0), sticky="ew")
-        export_btn.configure(command=self._on_export_m3u)
-        Tooltip(export_btn, "Guardar la playlist en formato M3U")
-        self._action_buttons.append((export_btn, "📤 Exportar M3U", "📤 Exportar"))
+        specs = [
+            ("📁 Cargar Audio", "📁 Cargar", self._on_load_files, "accent", "Agregar archivos  (L)"),
+            ("🗑 Limpiar", "🗑", self._on_clear_playlist, "secondary", "Vaciar playlist"),
+            ("📤 Exportar M3U", "📤 M3U", self._on_export_m3u, "secondary", "Exportar playlist"),
+        ]
+        for i, (text, compact, cmd, style, tip) in enumerate(specs):
+            btn = ctk.CTkButton(
+                actions, text=text, height=30,
+                **Styles.get_button_style(style))
+            btn.grid(row=0, column=i, padx=(3 if i else 0, 3), sticky="ew")
+            btn.configure(command=cmd)
+            Tooltip(btn, tip)
+            self._action_buttons.append((btn, text, compact))
 
     def _build_playlist(self) -> None:
-        """Vista de playlist (se expande con la ventana)."""
         self._playlist_view = PlaylistView(self._main_frame)
-        self._playlist_view.grid(row=5, column=0, sticky="nsew", padx=20, pady=(4, 6))
+        self._playlist_view.grid(row=6, column=0, sticky="nsew", padx=14, pady=(2, 4))
 
     def _build_status_bar(self) -> None:
-        """Barra de estado inferior: estado + conteo + duración total."""
         status = ctk.CTkFrame(self._main_frame, fg_color="transparent")
-        status.grid(row=6, column=0, sticky="ew", padx=20, pady=(2, 10))
+        status.grid(row=7, column=0, sticky="ew", padx=14, pady=(0, 8))
 
         left = ctk.CTkFrame(status, fg_color="transparent")
         left.pack(side="left")
 
-        self._state_dot = ctk.CTkLabel(
-            left,
-            text="●",
-            font=Styles.SMALL_FONT,
-            text_color=Styles.TEXT_SECONDARY,
-        )
+        self._state_dot = ctk.CTkLabel(left, text="●", font=Styles.SMALL_FONT,
+                                       text_color=Styles.TEXT_SECONDARY)
         self._state_dot.pack(side="left", padx=(2, 4))
-
-        self._state_label = ctk.CTkLabel(
-            left,
-            text="Detenido",
-            font=Styles.SMALL_FONT,
-            text_color=Styles.TEXT_SECONDARY,
-        )
+        self._state_label = ctk.CTkLabel(left, text="Detenido", font=Styles.SMALL_FONT,
+                                         text_color=Styles.TEXT_SECONDARY)
         self._state_label.pack(side="left")
 
         right = ctk.CTkFrame(status, fg_color="transparent")
         right.pack(side="right")
 
+        self._backend_label = ctk.CTkLabel(right, text="", font=Styles.SMALL_FONT,
+                                           text_color=Styles.ACCENT_COLOR)
+        self._backend_label.pack(side="right", padx=(8, 0))
+
         self._total_duration_label = ctk.CTkLabel(
-            right,
-            text="Total 00:00",
-            font=Styles.SMALL_FONT,
-            text_color=Styles.TEXT_SECONDARY,
-        )
+            right, text="Total 00:00", font=Styles.SMALL_FONT,
+            text_color=Styles.TEXT_SECONDARY)
         self._total_duration_label.pack(side="right", padx=(10, 0))
 
         self._track_count_label = ctk.CTkLabel(
-            right,
-            text="0 pistas",
-            font=Styles.SMALL_FONT,
-            text_color=Styles.ACCENT_COLOR,
-        )
+            right, text="0 pistas", font=Styles.SMALL_FONT,
+            text_color=Styles.ACCENT_COLOR)
         self._track_count_label.pack(side="right")
 
-    # ------------------------------------------------------------------
-    # Callbacks de componentes
-    # ------------------------------------------------------------------
-
     def _setup_callbacks(self) -> None:
-        """Configura los callbacks de los componentes (tras cada rebuild)."""
-        # Callbacks de controles
         self._player_controls.set_play_callback(self._on_play)
         self._player_controls.set_pause_callback(self._on_pause)
         self._player_controls.set_next_callback(self._on_next)
@@ -361,56 +337,135 @@ class MainWindow(ctk.CTk):
         self._player_controls.set_volume_callback(self._on_volume_change)
         self._player_controls.set_shuffle_callback(self._on_shuffle)
         self._player_controls.set_repeat_callback(self._on_repeat)
-
-        # Callbacks de playlist
         self._playlist_view.set_track_select_callback(self._on_track_select)
         self._playlist_view.set_remove_track_callback(self._on_remove_track)
 
     # ------------------------------------------------------------------
-    # Temas (cambio en vivo)
+    # EQ / settings
+    # ------------------------------------------------------------------
+
+    def _sync_eq_panel_from_config(self) -> None:
+        cfg = self._config_manager
+        self._eq_panel.set_gains(
+            cfg.get_eq_gains(), preset=cfg.get_eq_preset(),
+            preamp=cfg.get_eq_preamp(), enabled=cfg.get_eq_enabled(),
+            hp_filter=cfg.get_eq_hp_filter())
+
+    def _toggle_eq_panel(self) -> None:
+        if self._eq_panel.winfo_ismapped():
+            self._eq_panel.grid_remove()
+            self._eq_toggle_btn.configure(fg_color=Styles.BUTTON_COLOR,
+                                          hover_color=Styles.BUTTON_HOVER)
+        else:
+            self._eq_panel.grid()
+            self._eq_toggle_btn.configure(fg_color=Styles.ACCENT_COLOR,
+                                          hover_color=Styles.ACCENT_HOVER,
+                                          text_color="#ffffff")
+
+    def _on_eq_change(self, state: Dict) -> None:
+        """Cambios del panel EQ -> configuración + reprocesar pista."""
+        cfg = self._config_manager
+        cfg.set_eq_enabled(state["eq_enabled"], save=False)
+        cfg.set_eq_gains(state["eq_gains"], save=False)
+        cfg.set_eq_preamp(state["eq_preamp"], save=False)
+        cfg.set_eq_hp_filter(state["eq_hp_filter"], save=False)
+        cfg.set_eq_preset(state["eq_preset"], save=False)
+        cfg.save()
+
+        settings = {
+            "eq_enabled": state["eq_enabled"],
+            "eq_gains": state["eq_gains"],
+            "eq_preamp": state["eq_preamp"],
+            "eq_hp_filter": state["eq_hp_filter"],
+        }
+        # El EQ real requiere el motor HQ: activarlo siempre que el EQ lo
+        # pida (aunque HQ ya estuviera encendido por otra vía).
+        hq_engine = self._config_manager.get_hq_engine() or bool(state["eq_enabled"])
+        self._config_manager.set_hq_engine(hq_engine, save=False)
+        settings["hq_engine"] = hq_engine
+        if hq_engine:
+            logger.info("Motor HQ activo para el ecualizador")
+        self._audio_player.update_dsp_settings(settings)
+        self._update_backend_indicator()
+
+    def _open_audio_settings(self) -> None:
+        AudioSettingsPopup(
+            self,
+            current=self._player_settings_from_config(),
+            on_apply=self._on_audio_settings_applied,
+        )
+
+    def _on_audio_settings_applied(self, settings: Dict) -> None:
+        cfg = self._config_manager
+        for key in ("audio_driver", "sample_rate", "buffer_size", "output_depth",
+                    "normalization"):
+            if key in settings:
+                getattr(cfg, f"set_{key}")(settings[key], save=False)
+        cfg.set_hq_engine(bool(settings.get("hq_engine", cfg.get_hq_engine())), save=False)
+        cfg.save()
+
+        self._audio_player.apply_audio_settings(self._player_settings_from_config())
+        self._update_backend_indicator()
+        if self._playlist_manager.get_current_track() is not None:
+            self._refresh_playlist_view()
+            self._update_ui_state()
+        logger.info("Configuración de audio aplicada: %s", settings)
+
+    def _update_backend_indicator(self) -> None:
+        """Muestra el backend activo en la barra de estado."""
+        try:
+            if self._audio_player.is_hq():
+                self._backend_label.configure(text="● HQ Engine")
+            else:
+                backend = self._audio_player.get_backend()
+                if backend == "dsp":
+                    text = "● HQ…"
+                elif backend == "stream":
+                    text = ""
+                else:
+                    text = ""
+                self._backend_label.configure(text=text)
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
+    # Temas
     # ------------------------------------------------------------------
 
     @staticmethod
     def _display_name_for_theme(theme_key: str) -> str:
-        """Retorna el nombre visible de un tema dado su clave."""
         for display, key in Theme.get_display_names().items():
             if key == theme_key:
                 return display
-        return "🌙 Midnight Neon"
+        return list(Theme.get_display_names().keys())[0]
 
     def _on_theme_change(self, display_name: str) -> None:
-        """
-        Aplica un nuevo tema y reconstruye la UI en vivo.
-
-        Args:
-            display_name: Nombre visible del tema seleccionado.
-        """
         theme_key = Theme.get_display_names().get(display_name, "dark_premium")
         if theme_key == Styles.get_current_theme():
             return
-
         self._config_manager.set_theme(theme_key)
         Styles.setup_theme(theme_key)
         self.configure(fg_color=Styles.PRIMARY_COLOR)
         self._rebuild_ui()
-        logger.info(f"Tema cambiado a: {theme_key}")
+        logger.info("Tema cambiado a: %s", theme_key)
 
     def _rebuild_ui(self) -> None:
-        """Reconstruye la UI conservando todo el estado de reproducción."""
         was_playing = self._audio_player.get_state() == PlayerState.PLAYING
 
         self._build_ui()
         self._setup_callbacks()
 
-        # Re-aplicar estado visual
         self._player_controls.set_volume(self._audio_player.get_volume())
         self._player_controls.set_shuffle_state(self._is_shuffle)
         self._player_controls.set_repeat_state(self._repeat_mode)
+        self._sync_eq_panel_from_config()
 
         self._refresh_playlist_view()
         self._update_track_info_display()
         self._update_progress_ui()
+        self._update_analysis_ui()
         self._update_ui_state()
+        self._update_backend_indicator()
 
         if was_playing:
             self._visualizer.set_playing(True)
@@ -420,40 +475,20 @@ class MainWindow(ctk.CTk):
     # ------------------------------------------------------------------
 
     def _on_load_files(self) -> None:
-        """Maneja la carga de archivos de audio."""
-        file_paths = filedialog.askopenfilenames(
-            title="Select Audio Files",
-            filetypes=[
-                ("Audio Files", "*.mp3 *.wav *.ogg *.flac"),
-                ("MP3 Files", "*.mp3"),
-                ("WAV Files", "*.wav"),
-                ("OGG Files", "*.ogg"),
-                ("FLAC Files", "*.flac"),
-                ("All Files", "*.*"),
-            ],
-        )
-
+        patterns = FileHandler.FILE_DIALOG_PATTERNS
+        filetypes = [(label, pat) for label, pat in patterns]
+        file_paths = filedialog.askopenfilenames(title="Seleccionar archivos de audio",
+                                                 filetypes=filetypes)
         if file_paths:
             self._add_files_to_playlist(file_paths)
 
     def _add_files_to_playlist(self, file_paths: tuple) -> None:
-        """
-        Agrega archivos a la playlist procesando en lote.
-
-        Args:
-            file_paths: Tupla de rutas de archivos.
-        """
         start_time = time.time()
-
-        # Procesar archivos en lote
         new_tracks = []
         for file_path in file_paths:
             if not self._playlist_manager.has_track(file_path):
                 try:
-                    # Extraer metadatos
-                    metadata = MetadataExtractor.extract_metadata(file_path)
-
-                    # Crear track (la duración puede ser None si no se pudo obtener)
+                    metadata = self._meta_for(file_path)
                     track = Track(
                         file_path=file_path,
                         title=metadata.get("title") or FileHandler.get_file_name(file_path),
@@ -464,56 +499,43 @@ class MainWindow(ctk.CTk):
                 except Exception as e:
                     logger.warning(f"Error procesando {file_path}: {e}")
 
-        # Agregar tracks en lote
         for track in new_tracks:
             self._playlist_manager.add_track(track)
 
-        # Actualizar vista solo si hay cambios
         if new_tracks:
             self._refresh_playlist_view()
-
-            # Si es la primera carga y no hay pista actual, cargar la primera
             if self._playlist_manager.get_current_index() == -1 and not self._playlist_manager.is_empty():
                 self._playlist_manager.set_current_index(0)
                 self._load_current_track()
-
-            # Guardar playlist automáticamente en background
             self.after(1000, self._playlist_manager.save_playlist)
 
-        elapsed = time.time() - start_time
-        logger.info(f"Agregados {len(new_tracks)} tracks en {elapsed:.2f}s")
+        logger.info("Agregados %d tracks en %.2fs", len(new_tracks), time.time() - start_time)
+
+    def _meta_for(self, file_path: str) -> dict:
+        """Metadatos en caché (extrae una sola vez por ruta)."""
+        if file_path not in self._meta_cache:
+            self._meta_cache[file_path] = MetadataExtractor.extract_metadata(file_path)
+        return self._meta_cache[file_path]
 
     def _load_saved_playlist(self) -> None:
-        """Carga la playlist guardada al iniciar."""
         if self._playlist_manager.load_playlist():
             self._refresh_playlist_view()
-
-            # Cargar la pista actual si existe
             if not self._playlist_manager.is_empty() and self._playlist_manager.get_current_index() >= 0:
                 self._load_current_track()
-
-            logger.info("Playlist guardada cargada exitosamente")
+            logger.info("Playlist guardada cargada")
 
     def _refresh_playlist_view(self) -> None:
-        """Actualiza la vista de la playlist."""
         self._playlist_view.clear()
-
         tracks = self._playlist_manager.get_all_tracks()
         current_index = self._playlist_manager.get_current_index()
-
         for i, track in enumerate(tracks):
-            is_current = (i == current_index)
             self._playlist_view.add_track(
-                title=track.title,
-                artist=track.artist,
-                duration=track.duration,
-                index=i,
-                is_current=is_current,
-            )
-
+                title=track.title, artist=track.artist, duration=track.duration,
+                index=i, is_current=(i == current_index))
         self._playlist_view.update_count(len(tracks))
         self._playlist_view.refresh_search()
-        self._playlist_view.set_playing_state(self._audio_player.get_state() == PlayerState.PLAYING)
+        self._playlist_view.set_playing_state(
+            self._audio_player.get_state() == PlayerState.PLAYING)
         self._update_status_bar()
 
     # ------------------------------------------------------------------
@@ -521,19 +543,11 @@ class MainWindow(ctk.CTk):
     # ------------------------------------------------------------------
 
     def _load_current_track(self) -> bool:
-        """
-        Carga la pista actual en el reproductor.
-
-        Returns:
-            True si se cargó exitosamente, False en caso contrario.
-        """
         track = self._playlist_manager.get_current_track()
         if not track:
             return False
 
-        # Pasar la duración conocida (metadatos) para evitar estimaciones
-        # costosas y para que la detección de fin de pista sea precisa.
-        if self._audio_player.load(track.file_path, duration_hint=track.duration):
+        if self._audio_player.load(track.file_path, duration_hint=track.duration or None):
             self._update_track_info(track)
             self._total_duration = track.duration
             self._update_progress_ui()
@@ -541,50 +555,67 @@ class MainWindow(ctk.CTk):
         return False
 
     def _update_track_info(self, track: Track) -> None:
-        """
-        Actualiza la información de la pista en la UI.
-
-        Args:
-            track: Pista actual.
-        """
         self._song_title_label.set_full_text(track.title)
         self._artist_label.set_full_text(track.artist)
-        # Inicial para la portada (simula carátula de álbum)
-        initial = (track.title or "♪").strip()[:1] or "♪"
-        self._cover_badge.set_text(initial)
+
+        meta = self._meta_for(track.file_path)
+        self._current_meta = meta
+        self._meta_chips.set_metadata(meta, hq=self._audio_player.is_hq())
+
+        # Carátula: en caché o extraer en hilo (no bloquear la UI)
+        self._album_art.set_art(None, (track.title or "♪").strip()[:1] or "♪")
+        if track.file_path in self._art_cache:
+            self._album_art.set_art(self._art_cache[track.file_path],
+                                    (track.title or "♪").strip()[:1] or "♪")
+        else:
+            threading.Thread(
+                target=self._art_worker, args=(track.file_path,), daemon=True).start()
+
+        # Onda: reset hasta que llegue el análisis HQ
+        self._analysis = None
+        self._set_visualizer_mode(have_waveform=False)
+        self._update_backend_indicator()
+
+    def _art_worker(self, file_path: str) -> None:
+        """Extrae la carátula en un hilo y la encola para la UI."""
+        try:
+            art = MetadataExtractor.extract_album_art(file_path)
+        except Exception as e:
+            logger.warning(f"Error extrayendo carátula: {e}")
+            art = None
+        self._art_cache[file_path] = art
+        self._enqueue_ui("art", file_path)
 
     def _update_track_info_display(self) -> None:
-        """Re-aplica la información de la pista actual tras un rebuild."""
         track = self._playlist_manager.get_current_track()
         if track:
             self._update_track_info(track)
         else:
             self._song_title_label.set_full_text("No track loaded")
             self._artist_label.set_full_text("-")
-            self._cover_badge.set_text("♪")
+            self._album_art.set_art(None, "♪")
+            self._meta_chips.set_metadata({})
+            self._current_meta = {}
+            self._waveform.clear()
 
     def _on_play(self) -> None:
-        """Maneja el evento de play."""
-        if self._audio_player.get_state() == PlayerState.PAUSED:
+        state = self._audio_player.get_state()
+        if state == PlayerState.PAUSED:
             self._audio_player.resume()
         else:
             if not self._playlist_manager.get_current_track():
                 if not self._playlist_manager.is_empty():
                     self._playlist_manager.set_current_index(0)
                     self._load_current_track()
-
             if self._audio_player.get_state() != PlayerState.PLAYING:
                 self._audio_player.play()
-
         self._update_ui_state()
 
     def _on_pause(self) -> None:
-        """Maneja el evento de pause."""
         self._audio_player.pause()
         self._update_ui_state()
 
     def _on_next(self) -> None:
-        """Maneja el evento de siguiente pista."""
         if self._playlist_manager.next():
             was_playing = self._audio_player.get_state() == PlayerState.PLAYING
             self._load_current_track()
@@ -592,13 +623,11 @@ class MainWindow(ctk.CTk):
                 self._audio_player.play()
             self._refresh_playlist_view()
         else:
-            # No hay más pistas: detener la reproducción
             self._audio_player.stop()
             self._update_progress_ui()
         self._update_ui_state()
 
     def _on_previous(self) -> None:
-        """Maneja el evento de pista anterior."""
         if self._playlist_manager.previous():
             was_playing = self._audio_player.get_state() == PlayerState.PLAYING
             self._load_current_track()
@@ -607,36 +636,7 @@ class MainWindow(ctk.CTk):
             self._refresh_playlist_view()
             self._update_ui_state()
 
-    def _on_volume_change(self, volume: float) -> None:
-        """
-        Maneja el cambio de volumen (con guardado diferido).
-
-        Args:
-            volume: Nuevo volumen (0.0 - 1.0).
-        """
-        self._audio_player.set_volume(volume)
-        self._config_manager.set_volume(volume, save=False)
-
-        # Guardado diferido para no escribir el archivo en cada movimiento del slider
-        if self._volume_save_job is not None:
-            try:
-                self.after_cancel(self._volume_save_job)
-            except Exception:
-                pass
-        self._volume_save_job = self.after(500, self._save_volume_config)
-
-    def _save_volume_config(self) -> None:
-        """Guarda la configuración de volumen."""
-        self._volume_save_job = None
-        self._config_manager.save()
-
     def _on_track_select(self, index: int) -> None:
-        """
-        Maneja la selección de una pista en la playlist.
-
-        Args:
-            index: Índice de la pista seleccionada.
-        """
         if self._playlist_manager.set_current_index(index):
             was_playing = self._audio_player.get_state() == PlayerState.PLAYING
             self._load_current_track()
@@ -646,14 +646,7 @@ class MainWindow(ctk.CTk):
             self._update_ui_state()
 
     def _on_remove_track(self, index: int) -> None:
-        """
-        Maneja la remoción de una pista.
-
-        Args:
-            index: Índice de la pista a remover.
-        """
-        was_current = (index == self._playlist_manager.get_current_index())
-
+        was_current = index == self._playlist_manager.get_current_index()
         if self._playlist_manager.remove_track(index):
             if was_current:
                 self._audio_player.stop()
@@ -661,96 +654,102 @@ class MainWindow(ctk.CTk):
                 self._current_position = 0.0
                 self._total_duration = 0.0
                 self._update_progress_ui()
-
             self._refresh_playlist_view()
             self._update_ui_state()
-
-            # Guardar playlist automáticamente
             self._playlist_manager.save_playlist()
 
     def _on_clear_playlist(self) -> None:
-        """Vacía la playlist completa."""
         if self._playlist_manager.is_empty():
             return
-
-        if not messagebox.askyesno("Clear Playlist", "¿Eliminar todas las pistas de la playlist?"):
+        if not messagebox.askyesno("Limpiar playlist", "¿Eliminar todas las pistas?"):
             return
-
         self._playlist_manager.clear()
         self._audio_player.stop()
         self._current_position = 0.0
         self._total_duration = 0.0
         self._update_track_info_display()
-
         self._refresh_playlist_view()
         self._update_progress_ui()
         self._update_ui_state()
         self._playlist_manager.save_playlist()
-        logger.info("Playlist vaciada")
 
     def _on_export_m3u(self) -> None:
-        """Exporta la playlist actual a un archivo M3U."""
         if self._playlist_manager.is_empty():
-            messagebox.showinfo("Export M3U", "La playlist está vacía.")
+            messagebox.showinfo("Exportar", "La playlist está vacía.")
             return
-
         file_path = filedialog.asksaveasfilename(
-            title="Export Playlist as M3U",
-            defaultextension=".m3u",
-            filetypes=[("M3U Playlist", "*.m3u"), ("All Files", "*.*")],
-        )
-
+            title="Exportar playlist M3U", defaultextension=".m3u",
+            filetypes=[("M3U Playlist", "*.m3u"), ("All Files", "*.*")])
         if file_path:
             if self._playlist_manager.create_m3u_playlist(file_path):
-                messagebox.showinfo("Export M3U", f"Playlist exportada a:\n{file_path}")
+                messagebox.showinfo("Exportar", f"Playlist exportada a:\n{file_path}")
             else:
-                messagebox.showerror("Export M3U", "No se pudo exportar la playlist.")
+                messagebox.showerror("Exportar", "No se pudo exportar la playlist.")
+
+    def _on_volume_change(self, volume: float) -> None:
+        self._audio_player.set_volume(volume)
+        self._config_manager.set_volume(volume, save=False)
+        if self._volume_save_job is not None:
+            try:
+                self.after_cancel(self._volume_save_job)
+            except Exception:
+                pass
+        self._volume_save_job = self.after(500, self._save_volume_config)
+
+    def _save_volume_config(self) -> None:
+        self._volume_save_job = None
+        self._config_manager.save()
 
     # ------------------------------------------------------------------
-    # Barra de progreso
+    # Progreso
     # ------------------------------------------------------------------
 
     def _on_progress_press(self, event=None) -> None:
-        """Marca el inicio de un arrastre en la barra de progreso."""
         self._is_seeking = True
 
     def _on_progress_release(self, event=None) -> None:
-        """Maneja la liberación de la barra de progreso (busca la posición)."""
         self._is_seeking = False
         if self._total_duration > 0:
             position = (self._progress_slider.get() / 100.0) * self._total_duration
             self._audio_player.seek(position)
             self._current_position = position
-            self._update_progress_ui()
+            self._update_progress_ui(force=True)
 
     def _on_progress_change(self, value: float) -> None:
-        """
-        Maneja el arrastre en la barra de progreso (solo vista previa).
-
-        Args:
-            value: Nuevo valor del slider (0-100).
-        """
         if self._total_duration > 0:
             self._is_seeking = True
-            preview_position = (value / 100.0) * self._total_duration
-            self._time_label.configure(text=self._format_time(preview_position))
+            preview = (value / 100.0) * self._total_duration
+            self._time_label.configure(text=self._format_time(preview))
+
+    def _update_progress_ui(self, force: bool = False) -> None:
+        if self._is_seeking:
+            return
+        now = time.time()
+        if not force and now - self._last_progress_ui_time < self._progress_ui_interval:
+            return
+        self._last_progress_ui_time = now
+
+        if self._total_duration > 0:
+            progress = (self._current_position / self._total_duration) * 100
+            self._progress_slider.set(progress)
+            self._time_label.configure(text=self._format_time(self._current_position))
+            self._total_time_label.configure(text=f"/ {self._format_time(self._total_duration)}")
+            # Cabezal de la forma de onda (si hay análisis HQ)
+            if self._analysis:
+                self._waveform.set_playhead(self._current_position / self._total_duration)
+        else:
+            self._progress_slider.set(0)
+            self._time_label.configure(text="00:00")
+            self._total_time_label.configure(text="/ 00:00")
 
     # ------------------------------------------------------------------
-    # Hilo de audio → UI (cola thread-safe)
+    # Cola hilo de audio -> UI
     # ------------------------------------------------------------------
 
     def _enqueue_ui(self, event: str, *args) -> None:
-        """
-        Encola un evento del hilo de audio para procesarlo en el hilo principal.
-
-        Args:
-            event: Tipo de evento (pos, end, error).
-            *args: Argumentos del evento.
-        """
         self._ui_queue.put((event, args))
 
     def _poll_ui_queue(self) -> None:
-        """Procesa los eventos encolados por el hilo de audio (hilo principal)."""
         events = []
         try:
             while True:
@@ -765,11 +764,19 @@ class MainWindow(ctk.CTk):
             elif event == "end":
                 self._on_next()
             elif event == "replay":
-                # Repeat One: reiniciar la misma pista (hilo principal)
                 if self._audio_player.replay():
                     self._update_ui_state()
+            elif event == "hq_ready":
+                self._on_hq_ready_main_thread()
+            elif event == "art":
+                file_path = args[0]
+                track = self._playlist_manager.get_current_track()
+                if track and track.file_path == file_path:
+                    self._album_art.set_art(
+                        self._art_cache.get(file_path),
+                        (track.title or "♪").strip()[:1] or "♪")
             elif event == "error":
-                messagebox.showerror("Audio Error", f"Ocurrió un error de audio:\n{args[0]}")
+                messagebox.showerror("Audio", f"Ocurrió un error de audio:\n{args[0]}")
 
         if events:
             self._update_progress_ui()
@@ -777,71 +784,68 @@ class MainWindow(ctk.CTk):
         self.after(50, self._poll_ui_queue)
 
     def _on_position_update(self, position: float, duration: float) -> None:
-        """
-        Callback de posición (hilo de audio): solo encola la actualización.
-
-        Args:
-            position: Posición actual en segundos.
-            duration: Duración total en segundos.
-        """
         self._enqueue_ui("pos", position, duration)
 
     def _on_track_end(self) -> None:
-        """Callback cuando termina una pista (hilo de audio)."""
         if self._playlist_manager.get_repeat_mode() == 2:  # Repeat one
-            # Repetir la misma canción: se encola y se ejecuta en el hilo
-            # principal (replay()), evitando llamadas a pygame desde el
-            # hilo de audio y problemas al reiniciar el hilo de posición.
             self._enqueue_ui("replay")
         else:
-            # Avanzar a la siguiente canción en el hilo principal
             self._enqueue_ui("end")
 
-    def _on_audio_error(self, error_message: str) -> None:
-        """
-        Maneja errores del reproductor de audio (hilo de audio).
+    def _on_hq_track_ready(self) -> None:
+        """Callback del hilo de decode HQ -> encola para el hilo principal."""
+        self._enqueue_ui("hq_ready")
 
-        Args:
-            error_message: Mensaje de error.
-        """
-        logger.error(f"Error de audio: {error_message}")
+    def _on_hq_ready_main_thread(self) -> None:
+        """Acepta el buffer HQ y actualiza la onda + backend en la UI."""
+        if self._audio_player.accept_hq_buffer():
+            self._update_analysis_ui()
+            self._update_backend_indicator()
+            # Chips con insignia HQ
+            track = self._playlist_manager.get_current_track()
+            if track and track.file_path in self._meta_cache:
+                self._meta_chips.set_metadata(self._meta_cache[track.file_path], hq=True)
+            self._update_ui_state()
+
+    def _update_analysis_ui(self) -> None:
+        """Muestra la forma de onda si hay análisis HQ disponible."""
+        analysis = self._audio_player.get_analysis()
+        self._analysis = analysis
+        have_wave = bool(analysis and analysis.get("wave_mins") and analysis.get("wave_maxs"))
+        if have_wave:
+            self._waveform.set_waveform(analysis["wave_mins"], analysis["wave_maxs"])
+            self._waveform.set_playhead(0.0)
+        else:
+            self._waveform.clear()
+        self._set_visualizer_mode(have_waveform=have_wave)
+
+    def _set_visualizer_mode(self, have_waveform: bool) -> None:
+        """Alterna entre el ecualizador de barras y la forma de onda HQ."""
+        try:
+            if have_waveform:
+                self._visualizer.set_playing(False)
+                self._visualizer.grid_remove()
+                self._waveform.grid()
+            else:
+                self._waveform.grid_remove()
+                self._visualizer.grid()
+                self._visualizer.set_playing(
+                    self._audio_player.get_state() == PlayerState.PLAYING)
+        except tk.TclError:
+            pass
+
+    def _on_audio_error(self, error_message: str) -> None:
+        logger.error("Error de audio: %s", error_message)
         self._enqueue_ui("error", error_message)
 
     # ------------------------------------------------------------------
-    # Actualización de la UI
+    # Estado de la UI
     # ------------------------------------------------------------------
 
-    def _update_progress_ui(self) -> None:
-        """Actualiza la UI de la barra de progreso y los tiempos.
-
-        El redibujado del slider es costoso, así que se limita la
-        frecuencia (intervalo de ~0.15 s) sin afectar la fluidez visual.
-        """
-        if self._is_seeking:
-            return
-
-        now = time.time()
-        if now - self._last_progress_ui_time < self._progress_ui_interval:
-            return  # throttle: aún no toca redibujar
-        self._last_progress_ui_time = now
-
-        if self._total_duration > 0:
-            progress = (self._current_position / self._total_duration) * 100
-            self._progress_slider.set(progress)
-
-            current_time = self._format_time(self._current_position)
-            total_time = self._format_time(self._total_duration)
-            self._time_label.configure(text=current_time)
-            self._total_time_label.configure(text=f"/ {total_time}")
-        else:
-            self._progress_slider.set(0)
-            self._time_label.configure(text="00:00")
-            self._total_time_label.configure(text="/ 00:00")
-
     def _update_ui_state(self) -> None:
-        """Actualiza el estado de la UI según el estado del reproductor."""
         state = self._audio_player.get_state()
-        is_playing = (state == PlayerState.PLAYING)
+        is_playing = state == PlayerState.PLAYING
+        is_loading = state == PlayerState.LOADING
 
         self._player_controls.set_playing_state(is_playing)
         self._playlist_view.set_playing_state(is_playing)
@@ -849,16 +853,17 @@ class MainWindow(ctk.CTk):
 
         has_track = self._playlist_manager.get_current_track() is not None
         self._player_controls.set_enabled(has_track)
+        self._update_status_bar(is_loading)
+        self._update_backend_indicator()
 
-        self._update_status_bar()
-
-    def _update_status_bar(self) -> None:
-        """Actualiza la barra de estado: estado, conteo y duración total."""
+    def _update_status_bar(self, loading: bool = False) -> None:
         state = self._audio_player.get_state()
         if state == PlayerState.PLAYING:
             color, text = Styles.SUCCESS_COLOR, "Reproduciendo"
         elif state == PlayerState.PAUSED:
             color, text = Styles.WARNING_COLOR, "Pausado"
+        elif loading:
+            color, text = Styles.ACCENT_COLOR, "Procesando HQ…"
         else:
             color, text = Styles.TEXT_SECONDARY, "Detenido"
 
@@ -866,23 +871,13 @@ class MainWindow(ctk.CTk):
         self._state_label.configure(text=text)
 
         tracks = self._playlist_manager.get_all_tracks()
-        total_seconds = sum(t.duration or 0 for t in tracks)
+        total = sum((t.duration or 0) for t in tracks)
         self._track_count_label.configure(
-            text=f"{len(tracks)} pista{'s' if len(tracks) != 1 else ''}"
-        )
-        self._total_duration_label.configure(text=f"Total {self._format_time(total_seconds)}")
+            text=f"{len(tracks)} pista{'s' if len(tracks) != 1 else ''}")
+        self._total_duration_label.configure(text=f"Total {self._format_time(total)}")
 
     @staticmethod
     def _format_time(seconds: float) -> str:
-        """
-        Formatea tiempo en minutos:segundos.
-
-        Args:
-            seconds: Tiempo en segundos.
-
-        Returns:
-            Tiempo formateado (MM:SS).
-        """
         minutes = int(seconds // 60)
         secs = int(seconds % 60)
         return f"{minutes:02d}:{secs:02d}"
@@ -892,7 +887,6 @@ class MainWindow(ctk.CTk):
     # ------------------------------------------------------------------
 
     def _on_window_resize(self, event) -> None:
-        """Activa/desactiva el modo compacto según el ancho de la ventana."""
         if event.widget is not self:
             return
         compact = event.width < COMPACT_WIDTH
@@ -901,7 +895,6 @@ class MainWindow(ctk.CTk):
             self.after_idle(self._apply_compact)
 
     def _apply_compact(self) -> None:
-        """Ajusta textos y tamaños para ventanas estrechas."""
         for btn, normal_text, compact_text in self._action_buttons:
             try:
                 btn.configure(text=compact_text if self._compact else normal_text)
@@ -913,16 +906,6 @@ class MainWindow(ctk.CTk):
     # ------------------------------------------------------------------
 
     def _guard_shortcut(self, func):
-        """
-        Evita que los atajos de teclado se disparen mientras se escribe
-        en un campo de texto.
-
-        Args:
-            func: Función a ejecutar si el foco no está en un entry.
-
-        Returns:
-            Wrapper que verifica el foco antes de ejecutar.
-        """
         def _wrapper(event=None):
             widget = self.focus_get()
             if isinstance(widget, (ctk.CTkEntry, tk.Entry, tk.Text)):
@@ -931,52 +914,24 @@ class MainWindow(ctk.CTk):
         return _wrapper
 
     def _setup_keyboard_shortcuts(self) -> None:
-        """Configura los atajos de teclado."""
-        # Espacio: Play/Pause
         self.bind("<space>", self._guard_shortcut(self._toggle_play_pause))
-
-        # Flecha izquierda: Anterior (con Ctrl para retroceder 10s)
         self.bind("<Left>", self._guard_shortcut(self._on_previous))
         self.bind("<Control-Left>", self._guard_shortcut(self._seek_backward))
-
-        # Flecha derecha: Siguiente (con Ctrl para avanzar 10s)
         self.bind("<Right>", self._guard_shortcut(self._on_next))
         self.bind("<Control-Right>", self._guard_shortcut(self._seek_forward))
-
-        # Flecha arriba: Subir volumen
         self.bind("<Up>", self._guard_shortcut(self._volume_up))
-
-        # Flecha abajo: Bajar volumen
         self.bind("<Down>", self._guard_shortcut(self._volume_down))
-
-        # M: Mute/Unmute
         self.bind("<m>", self._guard_shortcut(self._toggle_mute))
-
-        # S: Toggle Shuffle
         self.bind("<s>", self._guard_shortcut(self._on_shuffle))
-
-        # R: Toggle Repeat
         self.bind("<r>", self._guard_shortcut(self._on_repeat))
-
-        # L: Load files
         self.bind("<l>", self._guard_shortcut(self._on_load_files))
-
-        # T: Cycle theme
         self.bind("<t>", self._guard_shortcut(self._cycle_theme))
-
-        # Q: Quit
         self.bind("<q>", self._guard_shortcut(self._on_close))
-
-        # F: Toggle fullscreen
         self.bind("<f>", self._guard_shortcut(self._toggle_fullscreen))
-
-        # Escape: Exit fullscreen
         self.bind("<Escape>", lambda e: self._exit_fullscreen())
-
         logger.info("Atajos de teclado configurados")
 
     def _cycle_theme(self) -> None:
-        """Cicla entre los temas disponibles (atajo T)."""
         keys = Theme.get_available_themes()
         current = Styles.get_current_theme()
         index = keys.index(current) if current in keys else 0
@@ -988,12 +943,7 @@ class MainWindow(ctk.CTk):
             pass
         self._on_theme_change(display)
 
-    # ------------------------------------------------------------------
-    # Controles auxiliares
-    # ------------------------------------------------------------------
-
     def _toggle_play_pause(self) -> None:
-        """Alterna entre play y pause."""
         state = self._audio_player.get_state()
         if state == PlayerState.PLAYING:
             self._on_pause()
@@ -1001,96 +951,70 @@ class MainWindow(ctk.CTk):
             self._on_play()
 
     def _seek_backward(self) -> None:
-        """Retrocede 10 segundos."""
-        current_pos = self._audio_player.get_position()
-        new_pos = max(0, current_pos - 10)
+        new_pos = max(0, self._audio_player.get_position() - 10)
         self._audio_player.seek(new_pos)
-        logger.info(f"Retrocediendo a {new_pos}s")
+        self._current_position = new_pos
+        self._update_progress_ui(force=True)
 
     def _seek_forward(self) -> None:
-        """Avanza 10 segundos."""
-        current_pos = self._audio_player.get_position()
         duration = self._audio_player.get_duration()
-        new_pos = min(duration, current_pos + 10)
+        new_pos = min(duration, self._audio_player.get_position() + 10)
         self._audio_player.seek(new_pos)
-        logger.info(f"Avanzando a {new_pos}s")
+        self._current_position = new_pos
+        self._update_progress_ui(force=True)
 
     def _volume_up(self) -> None:
-        """Sube el volumen un 10%."""
-        current_vol = self._audio_player.get_volume()
-        new_vol = min(1.0, current_vol + 0.1)
+        new_vol = min(1.0, self._audio_player.get_volume() + 0.1)
         self._on_volume_change(new_vol)
         self._player_controls.set_volume(new_vol)
-        logger.info(f"Volumen: {int(new_vol * 100)}%")
 
     def _volume_down(self) -> None:
-        """Baja el volumen un 10%."""
-        current_vol = self._audio_player.get_volume()
-        new_vol = max(0.0, current_vol - 0.1)
+        new_vol = max(0.0, self._audio_player.get_volume() - 0.1)
         self._on_volume_change(new_vol)
         self._player_controls.set_volume(new_vol)
-        logger.info(f"Volumen: {int(new_vol * 100)}%")
 
     def _toggle_mute(self) -> None:
-        """Alterna entre mute y unmute."""
         current_vol = self._audio_player.get_volume()
         if current_vol > 0:
             self._previous_volume = current_vol
             self._on_volume_change(0.0)
             self._player_controls.set_volume(0.0)
-            logger.info("Volumen silenciado")
         else:
-            new_vol = getattr(self, '_previous_volume', 0.7)
-            self._on_volume_change(new_vol)
-            self._player_controls.set_volume(new_vol)
-            logger.info(f"Volumen restaurado: {int(new_vol * 100)}%")
+            self._on_volume_change(getattr(self, "_previous_volume", 0.7))
+            self._player_controls.set_volume(getattr(self, "_previous_volume", 0.7))
 
     def _toggle_shuffle(self) -> None:
-        """Alterna el modo shuffle."""
-        current_shuffle = self._playlist_manager.get_shuffle()
-        new_shuffle = not current_shuffle
+        new_shuffle = not self._playlist_manager.get_shuffle()
         self._playlist_manager.set_shuffle(new_shuffle)
         self._config_manager.set_shuffle(new_shuffle)
         self._is_shuffle = new_shuffle
         self._player_controls.set_shuffle_state(new_shuffle)
-        logger.info(f"Shuffle: {'Activado' if new_shuffle else 'Desactivado'}")
 
     def _toggle_repeat(self) -> None:
-        """Alterna el modo repeat."""
-        current_mode = self._playlist_manager.get_repeat_mode()
-        new_mode = (current_mode + 1) % 3
+        new_mode = (self._playlist_manager.get_repeat_mode() + 1) % 3
         self._playlist_manager.set_repeat_mode(new_mode)
         self._config_manager.set_repeat_mode(new_mode)
         self._repeat_mode = new_mode
         self._player_controls.set_repeat_state(new_mode)
-        modes = ["Off", "Repeat All", "Repeat One"]
-        logger.info(f"Repeat: {modes[new_mode]}")
 
     def _on_shuffle(self) -> None:
-        """Maneja el clic en el botón shuffle."""
         self._toggle_shuffle()
 
     def _on_repeat(self) -> None:
-        """Maneja el clic en el botón repeat."""
         self._toggle_repeat()
 
     def _toggle_fullscreen(self) -> None:
-        """Alterna el modo pantalla completa."""
-        current_state = self.attributes("-fullscreen")
-        self.attributes("-fullscreen", not current_state)
-        logger.info(f"Fullscreen: {'Activado' if not current_state else 'Desactivado'}")
+        current = self.attributes("-fullscreen")
+        self.attributes("-fullscreen", not current)
 
     def _exit_fullscreen(self) -> None:
-        """Sale del modo pantalla completa."""
         self.attributes("-fullscreen", False)
-        logger.info("Fullscreen desactivado")
 
     # ------------------------------------------------------------------
     # Ciclo de vida
     # ------------------------------------------------------------------
 
     def cleanup(self) -> None:
-        """Limpia recursos antes de cerrar."""
         try:
             self._player_controls.stop_animations()
         except Exception:
@@ -1098,7 +1022,6 @@ class MainWindow(ctk.CTk):
         self._audio_player.cleanup()
 
     def run(self) -> None:
-        """Inicia el bucle principal de la aplicación."""
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         try:
             self.mainloop()
@@ -1108,38 +1031,24 @@ class MainWindow(ctk.CTk):
             logger.info("Aplicación finalizada")
 
     def _on_close(self) -> None:
-        """Maneja el cierre de la ventana."""
         try:
-            # Guardar geometría de ventana
             self.update_idletasks()
             geometry = self.geometry()
             parts = geometry.split('+')
             if len(parts) >= 3:
                 size = parts[0].split('x')
                 if len(size) == 2:
-                    width = int(size[0])
-                    height = int(size[1])
-                    x = int(parts[1])
-                    y = int(parts[2])
-                    self._config_manager.set_window_geometry(width, height, x, y)
-
-            # Guardar volumen actual
-            current_volume = self._audio_player.get_volume()
-            self._config_manager.set_volume(current_volume)
-
-            # Guardar estado de shuffle/repeat
+                    self._config_manager.set_window_geometry(
+                        int(size[0]), int(size[1]), int(parts[1]), int(parts[2]))
+            self._config_manager.set_volume(self._audio_player.get_volume())
             self._config_manager.set_shuffle(self._playlist_manager.get_shuffle())
             self._config_manager.set_repeat_mode(self._playlist_manager.get_repeat_mode())
-
-            # Guardar playlist y configuración
             self._playlist_manager.save_playlist()
             self._config_manager.save()
-
-            logger.info("Configuración guardada exitosamente")
+            logger.info("Configuración guardada")
         except Exception as e:
             logger.error(f"Error guardando configuración: {e}")
         finally:
-            # Limpiar recursos
             self.cleanup()
             self.destroy()
-            logger.info("Aplicación cerrada correctamente")
+            logger.info("Aplicación cerrada")
