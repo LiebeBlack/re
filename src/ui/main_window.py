@@ -80,6 +80,10 @@ class MainWindow(ctk.CTk):
         self._repeat_mode = self._config_manager.get_repeat_mode()  # 0: off, 1: all, 2: one
         self._volume_save_job: Optional[str] = None
         self._compact = False
+        # Throttle del redibujado de la barra de progreso (evita saturar
+        # la UI: el CTkSlider redibuja todo el widget en cada set()).
+        self._last_progress_ui_time = 0.0
+        self._progress_ui_interval = 0.15  # ~7 actualizaciones/segundo
 
         # Cola thread-safe para comunicar eventos del hilo de audio a la UI.
         # El sondeo se programa una sola vez aquí (hilo principal) y se
@@ -527,7 +531,9 @@ class MainWindow(ctk.CTk):
         if not track:
             return False
 
-        if self._audio_player.load(track.file_path):
+        # Pasar la duración conocida (metadatos) para evitar estimaciones
+        # costosas y para que la detección de fin de pista sea precisa.
+        if self._audio_player.load(track.file_path, duration_hint=track.duration):
             self._update_track_info(track)
             self._total_duration = track.duration
             self._update_progress_ui()
@@ -758,6 +764,10 @@ class MainWindow(ctk.CTk):
                 self._total_duration = args[1]
             elif event == "end":
                 self._on_next()
+            elif event == "replay":
+                # Repeat One: reiniciar la misma pista (hilo principal)
+                if self._audio_player.replay():
+                    self._update_ui_state()
             elif event == "error":
                 messagebox.showerror("Audio Error", f"Ocurrió un error de audio:\n{args[0]}")
 
@@ -779,8 +789,10 @@ class MainWindow(ctk.CTk):
     def _on_track_end(self) -> None:
         """Callback cuando termina una pista (hilo de audio)."""
         if self._playlist_manager.get_repeat_mode() == 2:  # Repeat one
-            # Repetir la misma canción (llamada segura de pygame)
-            self._audio_player.play()
+            # Repetir la misma canción: se encola y se ejecuta en el hilo
+            # principal (replay()), evitando llamadas a pygame desde el
+            # hilo de audio y problemas al reiniciar el hilo de posición.
+            self._enqueue_ui("replay")
         else:
             # Avanzar a la siguiente canción en el hilo principal
             self._enqueue_ui("end")
@@ -800,9 +812,18 @@ class MainWindow(ctk.CTk):
     # ------------------------------------------------------------------
 
     def _update_progress_ui(self) -> None:
-        """Actualiza la UI de la barra de progreso y los tiempos."""
+        """Actualiza la UI de la barra de progreso y los tiempos.
+
+        El redibujado del slider es costoso, así que se limita la
+        frecuencia (intervalo de ~0.15 s) sin afectar la fluidez visual.
+        """
         if self._is_seeking:
             return
+
+        now = time.time()
+        if now - self._last_progress_ui_time < self._progress_ui_interval:
+            return  # throttle: aún no toca redibujar
+        self._last_progress_ui_time = now
 
         if self._total_duration > 0:
             progress = (self._current_position / self._total_duration) * 100

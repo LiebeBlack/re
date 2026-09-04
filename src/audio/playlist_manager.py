@@ -108,6 +108,12 @@ class PlaylistManager:
             return False
         
         self._tracks.append(track)
+
+        # Si shuffle está activo, regenerar el orden para que la nueva
+        # pista quede incluida en la rotación (sin romper el orden actual).
+        if self._shuffle and len(self._tracks) > 1:
+            self._generate_shuffle_order()
+
         logger.info(f"Pista agregada: {track.title}")
         return True
     
@@ -156,6 +162,12 @@ class PlaylistManager:
                 self._current_index -= 1
             
             self._tracks.pop(index)
+
+            # Con shuffle activo, regenerar el orden para eliminar
+            # referencias obsoletas (evita IndexError en next/previous).
+            if self._shuffle and len(self._tracks) > 0:
+                self._generate_shuffle_order()
+
             logger.info(f"Pista removida: {track.title}")
             return True
         
@@ -166,6 +178,8 @@ class PlaylistManager:
         """Limpia la playlist"""
         self._tracks.clear()
         self._current_index = -1
+        self._shuffled_indices = []
+        self._shuffle_index = 0
     
     def get_track(self, index: int) -> Optional[Track]:
         """
@@ -303,6 +317,25 @@ class PlaylistManager:
         """
         return self._shuffle
     
+    def _safe_shuffle_index(self, shuffle_position: int) -> Optional[int]:
+        """
+        Retorna el índice real de pista para una posición del orden shuffle,
+        validando que sea un índice existente (los tracks pueden haberse
+        removido y dejar referencias obsoletas).
+
+        Args:
+            shuffle_position: Posición dentro de _shuffled_indices.
+
+        Returns:
+            Índice de pista válido o None si es obsoleto.
+        """
+        if not (0 <= shuffle_position < len(self._shuffled_indices)):
+            return None
+        actual = self._shuffled_indices[shuffle_position]
+        if 0 <= actual < len(self._tracks):
+            return actual
+        return None
+
     def _generate_shuffle_order(self) -> None:
         """Genera un orden aleatorio de reproducción"""
         indices = list(range(len(self._tracks)))
@@ -379,7 +412,15 @@ class PlaylistManager:
             else:
                 return None
         
-        actual_index = self._shuffled_indices[self._shuffle_index]
+        actual_index = self._safe_shuffle_index(self._shuffle_index)
+        if actual_index is None:
+            # Índice obsoleto (p. ej. tras remover pistas): regenerar
+            self._generate_shuffle_order()
+            self._shuffle_index = 0
+            actual_index = self._safe_shuffle_index(0)
+            if actual_index is None:
+                return None
+        
         self._current_index = actual_index
         return self._tracks[actual_index]
     
@@ -421,7 +462,14 @@ class PlaylistManager:
         else:
             self._shuffle_index -= 1
         
-        actual_index = self._shuffled_indices[self._shuffle_index]
+        actual_index = self._safe_shuffle_index(self._shuffle_index)
+        if actual_index is None:
+            self._generate_shuffle_order()
+            self._shuffle_index = 0
+            actual_index = self._safe_shuffle_index(0)
+            if actual_index is None:
+                return None
+        
         self._current_index = actual_index
         return self._tracks[actual_index]
     

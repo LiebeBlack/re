@@ -120,10 +120,13 @@ class Visualizer(tk.Canvas):
     bajo estático. Los colores de las barras usan el tema actual.
     """
 
+    # Periodo de animación: 60 ms (~16 fps) es suave y barato para la UI
+    ANIM_STEP_MS = 60
+
     def __init__(
         self,
         master,
-        bars: int = 26,
+        bars: int = 22,
         height: int = 40,
         bg: Optional[str] = None,
         bar_width: Optional[int] = None,
@@ -201,7 +204,7 @@ class Visualizer(tk.Canvas):
         self._phase += 1
         self._redraw()
         try:
-            self._after_id = self.after(40, self._tick)
+            self._after_id = self.after(self.ANIM_STEP_MS, self._tick)
         except tk.TclError:
             self._after_id = None
 
@@ -376,12 +379,17 @@ class EllipsisLabel(ctk.CTkLabel):
         kwargs.setdefault("anchor", "w")
         super().__init__(master, text=text, **kwargs)
 
+        # Objeto de fuente cacheado (crear uno por evento Configure es caro)
+        self._font_obj = None
+        self._last_width = -1
+
         # Re-trunca al redimensionar (responsividad)
         self.bind("<Configure>", lambda e: self._refresh())
 
     def set_full_text(self, text: str) -> None:
         """Establece el texto completo y lo trunca según el ancho actual."""
         self._full_text = text or ""
+        self._last_width = -1
         self._refresh()
 
     def _refresh(self) -> None:
@@ -394,9 +402,14 @@ class EllipsisLabel(ctk.CTkLabel):
             return
         if width <= 1 or not self._full_text:
             return
+        if width == self._last_width:
+            return  # sin cambios de ancho: nada que recalcular
+        self._last_width = width
 
         try:
-            font = tkfont.Font(font=self._font)
+            if self._font_obj is None:
+                self._font_obj = tkfont.Font(font=self._font)
+            font = self._font_obj
             available = max(20, width - 8)  # margen de padding interno
         except tk.TclError:
             return

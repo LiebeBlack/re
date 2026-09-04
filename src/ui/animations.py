@@ -222,12 +222,14 @@ class Pulse:
         self._running = False
         self._after_id: Optional[str] = None
         self._phase = 0.0
+        self._last_color: Optional[str] = None
 
     def start(self) -> None:
         """Comienza el pulso (no-op si ya corre)."""
         if self._running:
             return
         self._running = True
+        self._last_color = None
         self._tick()
 
     def stop(self) -> None:
@@ -270,18 +272,26 @@ class Pulse:
             self._running = False
             return
 
-        self._phase += 2 * math.pi * (self._period / 1000.0) / (1000.0 / 16.0)
+        # Paso de 30 ms (~33 fps): suficiente para un resplandor suave
+        # sin saturar la UI (cada configure de CTk redibuja el widget).
+        step_ms = 30
+        self._phase += 2 * math.pi * step_ms / self._period
         wave = 0.5 * (1 + math.sin(self._phase))
 
         color = blend_colors(self._base, self._pulse, wave * 0.55)
-        try:
-            self._setter(color)
-        except tk.TclError:
-            self._running = False
-            return
+        # No redibujar si el color apenas cambió (evita trabajo inútil)
+        if color == self._last_color:
+            pass
+        else:
+            self._last_color = color
+            try:
+                self._setter(color)
+            except tk.TclError:
+                self._running = False
+                return
 
         try:
-            self._after_id = self._master.after(16, self._tick)
+            self._after_id = self._master.after(step_ms, self._tick)
         except tk.TclError:
             self._running = False
 
