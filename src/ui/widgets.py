@@ -1,0 +1,427 @@
+"""
+Widgets - Componentes UI modernos y reutilizables.
+
+Incluye:
+  * Tooltip: ayuda contextual flotante al pasar el ratón.
+  * Visualizer: ecualizador animado (canvas) que reacciona a play/pause.
+  * CoverBadge: portada circular con la inicial de la pista y gradiente.
+  * EllipsisLabel: label que trunca el texto con "…" según su ancho real.
+"""
+
+import math
+import random
+import tkinter as tk
+import tkinter.font as tkfont
+from typing import List, Optional
+
+import customtkinter as ctk
+
+from src.ui.styles import Styles, blend_colors
+
+
+# ---------------------------------------------------------------------------
+# Tooltip
+# ---------------------------------------------------------------------------
+
+class Tooltip:
+    """
+    Muestra un pequeño globo de ayuda al mantener el ratón sobre un widget.
+
+    El globo aparece tras un breve retardo y se posiciona justo debajo
+    del widget. Se destruye al salir o al hacer clic.
+    """
+
+    def __init__(self, widget: tk.Misc, text: str, delay: int = 500):
+        """
+        Args:
+            widget: Widget al que asociar el tooltip.
+            text: Texto del tooltip.
+            delay: Retardo en ms antes de mostrarse.
+        """
+        self._widget = widget
+        self._text = text
+        self._delay = delay
+        self._after_id: Optional[str] = None
+        self._tip: Optional[tk.Toplevel] = None
+
+        # add="+" conserva otros bindings del widget
+        widget.bind("<Enter>", self._on_enter, add="+")
+        widget.bind("<Leave>", self._on_leave, add="+")
+        widget.bind("<ButtonPress>", self._on_leave, add="+")
+
+    def _on_enter(self, event=None) -> None:
+        """Programa la aparición del tooltip tras el retardo."""
+        self._on_leave()
+        try:
+            self._after_id = self._widget.after(self._delay, self._show)
+        except tk.TclError:
+            pass
+
+    def _show(self) -> None:
+        """Crea y posiciona la ventana del tooltip."""
+        try:
+            if not self._widget.winfo_exists():
+                return
+            x = self._widget.winfo_rootx()
+            y = self._widget.winfo_rooty() + self._widget.winfo_height() + 6
+
+            tip = tk.Toplevel(self._widget)
+            tip.wm_overrideredirect(True)
+            tip.wm_geometry(f"+{x}+{y}")
+            tip.attributes("-topmost", True)
+
+            frame = ctk.CTkFrame(
+                tip,
+                fg_color=Styles.SECONDARY_COLOR,
+                corner_radius=8,
+                border_width=1,
+                border_color=Styles.BORDER_COLOR,
+            )
+            frame.pack()
+
+            label = ctk.CTkLabel(
+                frame,
+                text=self._text,
+                font=Styles.SMALL_FONT,
+                text_color=Styles.TEXT_COLOR,
+            )
+            label.pack(padx=9, pady=5)
+
+            self._tip = tip
+        except tk.TclError:
+            self._tip = None
+
+    def _on_leave(self, event=None) -> None:
+        """Cancela el retardo y destruye el tooltip si estaba visible."""
+        if self._after_id is not None:
+            try:
+                self._widget.after_cancel(self._after_id)
+            except tk.TclError:
+                pass
+            self._after_id = None
+        if self._tip is not None:
+            try:
+                self._tip.destroy()
+            except tk.TclError:
+                pass
+            self._tip = None
+
+
+# ---------------------------------------------------------------------------
+# Visualizer (ecualizador animado)
+# ---------------------------------------------------------------------------
+
+class Visualizer(tk.Canvas):
+    """
+    Ecualizador de barras dibujado en un Canvas.
+
+    Cuando está reproduciendo, las barras bailan con una onda
+    pseudoaleatoria suave (~25 fps). En pausa/stop quedan en un nivel
+    bajo estático. Los colores de las barras usan el tema actual.
+    """
+
+    def __init__(
+        self,
+        master,
+        bars: int = 26,
+        height: int = 40,
+        bg: Optional[str] = None,
+        bar_width: Optional[int] = None,
+        **kwargs,
+    ):
+        """
+        Args:
+            master: Widget padre.
+            bars: Número de barras del ecualizador.
+            height: Altura del canvas.
+            bg: Color de fondo (default: Styles.SECONDARY_COLOR).
+            bar_width: Ancho fijo de barra (default: automático).
+            **kwargs: Argumentos extra para tk.Canvas.
+        """
+        kwargs.setdefault("highlightthickness", 0)
+        kwargs.setdefault("height", height)
+        super().__init__(master, bg=bg or Styles.SECONDARY_COLOR, **kwargs)
+
+        self._bar_count = max(4, bars)
+        self._fixed_bar_width = bar_width
+        self._playing = False
+        self._phase = random.uniform(0, 1000)
+        self._after_id: Optional[str] = None
+        self._destroyed = False
+
+        # Re-dibujar al cambiar de tamaño (responsividad)
+        self.bind("<Configure>", lambda e: self._redraw())
+        self.bind("<Destroy>", self._on_destroy)
+
+    # -- Estado -----------------------------------------------------------
+
+    def set_playing(self, playing: bool) -> None:
+        """
+        Activa/desactiva la animación.
+
+        Args:
+            playing: True para animar las barras, False para dejarlas bajas.
+        """
+        if playing == self._playing:
+            return
+        self._playing = playing
+        if playing:
+            self._start_loop()
+        else:
+            self._stop_loop()
+            self._redraw()
+
+    def is_playing(self) -> bool:
+        """Retorna True si la animación está activa."""
+        return self._playing
+
+    # -- Ciclo de animación ------------------------------------------------
+
+    def _start_loop(self) -> None:
+        if self._after_id is None:
+            self._tick()
+
+    def _stop_loop(self) -> None:
+        if self._after_id is not None:
+            try:
+                self.after_cancel(self._after_id)
+            except tk.TclError:
+                pass
+            self._after_id = None
+
+    def _on_destroy(self, event=None) -> None:
+        """Limpia el after pendiente al destruir el widget."""
+        self._destroyed = True
+        self._stop_loop()
+
+    def _tick(self) -> None:
+        if self._destroyed or not self._playing:
+            self._after_id = None
+            return
+        self._phase += 1
+        self._redraw()
+        try:
+            self._after_id = self.after(40, self._tick)
+        except tk.TclError:
+            self._after_id = None
+
+    # -- Dibujo ------------------------------------------------------------
+
+    def _bar_height(self, i: int) -> float:
+        """
+        Calcula la altura normalizada (0..1) de la barra i.
+
+        Reproduciendo: suma de senos con frecuencias distintas + ruido
+        determinista, que se ve natural sin coste.
+        Pausa/stop: nivel bajo casi constante con mínima variación.
+        """
+        if self._playing:
+            t = self._phase * 0.22
+            wave = (
+                0.5 * math.sin(t + i * 0.85)
+                + 0.3 * math.sin(t * 1.7 + i * 1.6)
+                + 0.2 * math.sin(t * 3.1 + i * 0.4)
+            )
+            noise = 0.25 * math.sin(i * 12.9898 * 0.1 + self._phase * 0.05)
+            h = 0.28 + 0.72 * max(0.0, min(1.0, (wave + 1.0) / 2.0 + noise * 0.3))
+        else:
+            h = 0.10 + 0.05 * math.sin(i * 2.3 + self._phase * 0.2)
+        return max(0.06, min(1.0, h))
+
+    def _redraw(self) -> None:
+        """Redibuja todas las barras según el tamaño actual del canvas."""
+        try:
+            self.delete("all")
+        except tk.TclError:
+            return
+
+        width = self.winfo_width()
+        height = self.winfo_height()
+        if width <= 2 or height <= 2:
+            return
+
+        n = self._bar_count
+        gap = 3
+        if self._fixed_bar_width:
+            bar_w = self._fixed_bar_width
+        else:
+            bar_w = max(2, (width - gap * (n - 1)) // n)
+
+        accent = Styles.ACCENT_COLOR
+        glow = Styles.GLOW_COLOR
+        bg = self.cget("bg")
+
+        for i in range(n):
+            h = self._bar_height(i)
+            bar_h = max(3, int(height * h))
+            x1 = i * (bar_w + gap)
+            y1 = height - bar_h
+            x2 = x1 + bar_w
+
+            # Gradiente vertical de color por barra (acento → glow)
+            t = i / max(1, n - 1)
+            color = blend_colors(accent, glow, t)
+            color = blend_colors(bg, color, 0.55 + 0.45 * h)
+
+            # Barra con extremo superior redondeado (rectángulo + óvalo)
+            radius = min(bar_w, bar_h) / 2.0
+            if bar_h > radius * 2:
+                self.create_rectangle(x1, y1 + radius, x2, height, fill=color, outline="")
+                self.create_oval(x1, y1, x2, y1 + radius * 2, fill=color, outline="")
+            else:
+                self.create_oval(x1, y1, x2, height, fill=color, outline="")
+
+
+# ---------------------------------------------------------------------------
+# CoverBadge (portada de la pista)
+# ---------------------------------------------------------------------------
+
+class CoverBadge(tk.Canvas):
+    """
+    Cuadro redondeado con la inicial de la pista y gradiente de tema.
+
+    Simula la portada de álbum cuando no hay carátula real.
+    """
+
+    def __init__(self, master, size: int = 76, text: str = "♪", **kwargs):
+        """
+        Args:
+            master: Widget padre.
+            size: Lado del canvas (cuadrado).
+            text: Inicial/texto a mostrar (normalmente la inicial del título).
+            **kwargs: Argumentos extra para tk.Canvas.
+        """
+        kwargs.setdefault("highlightthickness", 0)
+        kwargs.setdefault("width", size)
+        kwargs.setdefault("height", size)
+        super().__init__(master, **kwargs)
+
+        self._size = size
+        self._text = text or "♪"
+        self._draw()
+
+    def set_text(self, text: str) -> None:
+        """Actualiza la inicial mostrada y redibuja."""
+        self._text = (text or "♪").strip()[:2]
+        self._draw()
+
+    def _draw(self) -> None:
+        """Dibuja el fondo con gradiente (simulado por franjas) y el texto."""
+        try:
+            self.delete("all")
+        except tk.TclError:
+            return
+
+        s = self._size
+        radius = int(s * 0.24)
+        color_a = Styles.GRADIENT_A
+        color_b = Styles.GRADIENT_B
+
+        # Gradiente vertical simulado con franjas horizontales redondeadas
+        stripes = 12
+        stripe_h = s / stripes
+        for i in range(stripes):
+            t = i / (stripes - 1)
+            color = blend_colors(color_a, color_b, t)
+            y0 = i * stripe_h
+            y1 = y0 + stripe_h + 1
+            if y0 < s:
+                self._rounded_rect(self, 0, y0, s, min(y1, s), radius, fill=color, outline="")
+
+        # Inicial centrada en grande
+        try:
+            font = tkfont.Font(family=Styles.FONT_FAMILY, size=int(s * 0.34), weight="bold")
+        except tk.TclError:
+            font = None
+        self.create_text(
+            s // 2,
+            s // 2 + 1,
+            text=self._text.upper(),
+            fill="#ffffff",
+            font=font,
+        )
+
+    @staticmethod
+    def _rounded_rect(canvas, x1, y1, x2, y2, radius, **kwargs) -> None:
+        """
+        Dibuja un rectángulo redondeado en el canvas.
+
+        Usa dos rectángulos + cuatro óvalos para simular esquinas suaves.
+        """
+        r = min(radius, (y2 - y1) / 2, (x2 - x1) / 2)
+        canvas.create_rectangle(x1, y1 + r, x2, y2 - r, **kwargs)
+        canvas.create_rectangle(x1 + r, y1, x2 - r, y2, **kwargs)
+        canvas.create_oval(x1, y1, x1 + 2 * r, y1 + 2 * r, **kwargs)
+        canvas.create_oval(x2 - 2 * r, y1, x2, y1 + 2 * r, **kwargs)
+        canvas.create_oval(x1, y2 - 2 * r, x1 + 2 * r, y2, **kwargs)
+        canvas.create_oval(x2 - 2 * r, y2 - 2 * r, x2, y2, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# EllipsisLabel (texto que se trunca con "…")
+# ---------------------------------------------------------------------------
+
+class EllipsisLabel(ctk.CTkLabel):
+    """
+    Label que muestra el texto completo almacenado y lo trunca con "…"
+    según el ancho real del widget (se re-adapta al redimensionar).
+
+    Uso: crear con el texto completo y llamar a set_full_text() para
+    cambiarlo. Nunca usar configure(text=...) directamente.
+    """
+
+    def __init__(self, master, text: str = "", **kwargs):
+        self._full_text = text
+        self._font = kwargs.get("font", Styles.NORMAL_FONT)
+        kwargs.setdefault("anchor", "w")
+        super().__init__(master, text=text, **kwargs)
+
+        # Re-trunca al redimensionar (responsividad)
+        self.bind("<Configure>", lambda e: self._refresh())
+
+    def set_full_text(self, text: str) -> None:
+        """Establece el texto completo y lo trunca según el ancho actual."""
+        self._full_text = text or ""
+        self._refresh()
+
+    def _refresh(self) -> None:
+        """Recalcula el texto visible para que quepa en el ancho actual."""
+        try:
+            if not self.winfo_exists():
+                return
+            width = self.winfo_width()
+        except tk.TclError:
+            return
+        if width <= 1 or not self._full_text:
+            return
+
+        try:
+            font = tkfont.Font(font=self._font)
+            available = max(20, width - 8)  # margen de padding interno
+        except tk.TclError:
+            return
+
+        shown = self._fit_text(font, available)
+        try:
+            if self.cget("text") != shown:
+                self.configure(text=shown)
+        except tk.TclError:
+            pass
+
+    def _fit_text(self, font, available: int) -> str:
+        """Ajusta el texto con elipsis para que quepa en available px."""
+        text = self._full_text
+        if font.measure(text) <= available:
+            return text
+
+        ellipsis = "…"
+        low, high = 0, len(text)
+        # Búsqueda binaria del prefijo más largo que cabe con la elipsis
+        while low < high:
+            mid = (low + high + 1) // 2
+            candidate = text[:mid] + ellipsis
+            if font.measure(candidate) <= available:
+                low = mid
+            else:
+                high = mid - 1
+        return text[:low] + ellipsis if low > 0 else ellipsis

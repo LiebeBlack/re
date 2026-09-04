@@ -33,10 +33,12 @@ musik/
 │   ├── main.py              # Punto de entrada principal
 │   ├── ui/                  # Módulos de interfaz gráfica
 │   │   ├── __init__.py
-│   │   ├── main_window.py   # Ventana principal
+│   │   ├── main_window.py   # Ventana principal (layout, temas, estado)
 │   │   ├── player_controls.py  # Controles de reproducción
 │   │   ├── playlist_view.py    # Vista de lista de reproducción
-│   │   └── styles.py          # Estilos y colores
+│   │   ├── styles.py          # Temas, colores y helpers de color
+│   │   ├── animations.py      # Motor de animaciones (tweens, pulso, hover)
+│   │   └── widgets.py         # Widgets reutilizables (tooltip, visualizador)
 │   ├── audio/                # Módulos de audio
 │   │   ├── __init__.py
 │   │   ├── player.py         # Motor de reproducción
@@ -113,43 +115,60 @@ mutagen>=1.46.0  # Opcional, para metadatos
 
 ## 4. Diseño de Interfaz
 
-### 4.1 Esquema de Colores (Tema Dark Premium)
+### 4.1 Esquema de Colores (Tema Midnight Neon / dark_premium)
 
 ```python
-PRIMARY_COLOR = "#1a1a2e"      # Fondo principal
-SECONDARY_COLOR = "#16213e"    # Fondo secundario
-ACCENT_COLOR = "#e94560"       # Color de acento
-TEXT_COLOR = "#ffffff"         # Texto principal
-TEXT_SECONDARY = "#a0a0a0"     # Texto secundario
-BUTTON_COLOR = "#0f3460"       # Botones
-BUTTON_HOVER = "#1a1a2e"       # Hover en botones
+PRIMARY_COLOR = "#0a0e1a"      # Fondo principal (casi negro azulado)
+SECONDARY_COLOR = "#101728"    # Fondo secundario
+CARD_COLOR = "#151d33"         # Superficies / tarjetas elevadas
+ACCENT_COLOR = "#8b5cf6"       # Violeta eléctrico (acento principal)
+ACCENT_HOVER = "#a78bfa"       # Acento en hover
+GLOW_COLOR = "#22d3ee"         # Cian neón (resplandor / gradiente)
+GRADIENT_A = "#8b5cf6"         # Inicio del gradiente (portada)
+GRADIENT_B = "#22d3ee"         # Fin del gradiente (portada)
+TEXT_COLOR = "#f1f5f9"         # Texto principal
+TEXT_SECONDARY = "#8b93a7"     # Texto secundario
+BUTTON_COLOR = "#1e2a45"       # Botones
+BUTTON_HOVER = "#2a3a5f"       # Hover en botones
+BORDER_COLOR = "#263252"       # Bordes sutiles (efecto glass)
 ```
+
+**Temas disponibles** (cambio en vivo desde el header o con la tecla `T`):
+
+| Tema | Clave | Acento | Glow |
+|---|---|---|---|
+| 🌙 Midnight Neon | `dark_premium` | `#8b5cf6` | `#22d3ee` |
+| 🌊 Deep Ocean | `dark_blue` | `#38bdf8` | `#22d3ee` |
+| 🌌 Aurora | `dark_purple` | `#a78bfa` | `#34d399` |
+| 🌅 Sunset | `sunset` | `#fb7185` | `#fb923c` |
+| 🍀 Emerald | `emerald` | `#34d399` | `#a3e635` |
+| ☀️ Light | `light` | `#6366f1` | `#0ea5e9` |
 
 ### 4.2 Layout de la Ventana Principal
 
 ```
 ┌─────────────────────────────────────────────┐
-│  Musik Player                    [Min][Max][X]│
-├─────────────────────────────────────────────┤
-│                                             │
-│          [LOGO/ICON]                        │
-│                                             │
-│        Now Playing: [Song Title]            │
-│             [Artist Name]                    │
-│                                             │
-│      ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░  [00:00/03:45]   │
-│                                             │
-│    [◀◀]  [▶]  [⏸]  [▶▶]    [◖───◗]         │
-│                                             │
-├─────────────────────────────────────────────┤
-│  Playlist                                  │
-│  ┌───────────────────────────────────────┐ │
-│  │ 1. Song Title - Artist         [3:45] │ │
-│  │ 2. Another Song - Artist       [4:20] │ │
-│  │ 3. Third Song - Artist         [2:55] │ │
-│  │ ...                                 │ │
-│  └───────────────────────────────────────┘ │
-└─────────────────────────────────────────────┘
+│  Musik Player                    [Temas ▾] [Min][Max][X]│
+├────────────────────────────────────────────────────────┤
+│  ┌─ Now Playing ─────────────────────────────────────┐ │
+│  │ (◉)  Song Title (elipsis)            00:00 / 03:45 │ │
+│  │      Artist Name                      [00:00/03:45] │ │
+│  │      ▮▮▮▮▮▮▮▮▮▮▮▮ (ecualizador animado)              │ │
+│  └────────────────────────────────────────────────────┘ │
+│      ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓░░░  [barra de progreso]       │
+│   [◀◀]      [▶/⏸]      [▶▶]     🔊 [slider] 70%        │
+│          [🔀 Shuffle]    [🔁 Repeat]                    │
+│   [📁 Cargar Audio] [🗑 Limpiar] [📤 Exportar M3U]       │
+├────────────────────────────────────────────────────────┤
+│  Playlist                            [3 tracks ▾]      │
+│  ┌──────────────────────────────────────────────────┐  │
+│  │ ▮▮▮▮ Song Title - Artist                  [3:45] │  │
+│  │ 2.  Another Song - Artist                [4:20] │  │
+│  │ 3.  Third Song - Artist                  [2:55] │  │
+│  └──────────────────────────────────────────────────┘  │
+├────────────────────────────────────────────────────────┤
+│  ● Reproduciendo           3 pistas   Total 11:00      │
+└────────────────────────────────────────────────────────┘
 ```
 
 ### 4.3 Componentes UI

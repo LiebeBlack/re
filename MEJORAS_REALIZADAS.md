@@ -4,6 +4,66 @@
 
 Se ha mejorado significativamente el código para hacerlo más robusto, completo y profesional. Se han agregado múltiples funcionalidades faltantes y se ha preparado el proyecto para release en GitHub.
 
+## Mejoras Recientes (Versión 2.0.0) - Rediseño Ultra Moderno
+
+### 1. Sistema de Temas Ultra Modernos (`styles.py`)
+
+- **6 temas oscuros + 1 claro**: `dark_premium` (Midnight Neon, insignia), `dark_blue` (Deep Ocean), `dark_purple` (Aurora), `sunset`, `emerald` y `light`.
+- **Paletas completas**: cada tema define colores derivados nuevos — `card`, `border`, `glow`, `accent_hover`, `gradient_a`, `gradient_b` — además de los clásicos.
+- **Compatibilidad total**: los nombres de temas antiguos (`dark_premium`, `dark_blue`, `dark_purple`, `light`) se conservan, por lo que las configuraciones guardadas siguen funcionando.
+- **Helpers de color** (`blend_colors`, `lighten`, `darken`, `hex_to_rgb`, `rgb_to_hex`) reutilizados por las animaciones.
+
+### 2. Motor de Animaciones (`animations.py`, nuevo)
+
+- **Tween genérico** con curvas de easing (`ease_out_cubic`, `ease_in_out_quad`, `ease_out_back`) basado en `after()` (seguro para Tkinter, se cancela solo).
+- **Pulse**: resplandor continuo (glow) que oscila el color del botón de play mientras suena.
+- **`bind_hover_effect`**: escala + transición de color al pasar el ratón sobre botones.
+- **`tween_color`**: interpolación de colores hex para transiciones suaves.
+
+### 3. Widgets Modernos (`widgets.py`, nuevo)
+
+- **Visualizer**: ecualizador de barras en Canvas con onda pseudoaleatoria (~25 fps) que se anima al reproducir y queda en nivel bajo en pausa. Re-dibuja solo al cambiar de tamaño.
+- **Tooltip**: ayuda contextual flotante con retardo, estilo acorde al tema.
+- **CoverBadge**: portada cuadrada redondeada con gradiente del tema y la inicial de la pista.
+- **EllipsisLabel**: trunca títulos largos con "…" según el ancho real (búsqueda binaria de texto) y se re-adapta al redimensionar.
+
+### 4. Controles de Reproducción Modernos (`player_controls.py`)
+
+- Botón de **play/pause circular** con resplandor pulsante mientras se reproduce.
+- Botones con **animación de escala al hover** y esquinas redondeadas.
+- **Volumen mejorado**: icono dinámico (🔇/🔉/🔊) + porcentaje en vivo en tipografía mono.
+- Botones de **shuffle/repeat con etiqueta** y estados visuales claros (acento cuando activos).
+- **Tooltips en todos los controles** con los atajos de teclado.
+- El volumen y los modos quedan **siempre habilitados** (antes se deshabilitaban sin pista).
+
+### 5. Playlist Moderna (`playlist_view.py`)
+
+- Filas tipo **tarjeta con esquinas redondeadas** y resaltado al pasar el ratón.
+- **Mini ecualizador animado** en la pista en reproducción (sincronizado con play/pause).
+- Títulos con **elipsis automática** y contador en forma de píldora.
+- Búsqueda en vivo conservada y mejorada visualmente.
+
+### 6. Ventana Principal Rediseñada (`main_window.py`)
+
+- **Header con selector de temas** (cambio en vivo sin reiniciar) + atajo `T` para ciclar.
+- **Tarjeta "Now Playing"**: portada con inicial, título/artista con elipsis, ecualizador grande y tiempos en grande.
+- **Layout responsivo por grid**: la playlist se expande, las filas se adaptan al ancho.
+- **Modo compacto automático** (< 840 px): los botones de acción acortan su texto.
+- **Barra de estado**: estado (● Reproduciendo/Pausado/Detenido), conteo de pistas y duración total de la playlist.
+- **Rebuild en vivo al cambiar de tema** conservando el estado de reproducción (se detienen animaciones viejas para evitar fugas de `after()`).
+
+### 7. Bugs Corregidos en el Proceso
+
+- `CoverBadge._rounded_rect` no recibía el canvas (error en tiempo de ejecución al crear la ventana).
+- `corner_radius` duplicado en `PlayerControls` (regresión del bug de kwargs que ya se había corregido en 1.1.0); ahora `_button_style` acepta overrides.
+
+### 8. Verificación
+
+- **49 tests unitarios** siguen pasando (`python -m unittest discover -s tests -v`).
+- **Smoke test real**: creación de ventana, cambio de tema en vivo (4 temas), ciclo por atajo, modo compacto, renderizado de playlist, búsqueda y cierre limpio.
+
+---
+
 ## Mejoras Recientes (Versión 1.1.0)
 
 ### 1. Bugs Críticos Corregidos (la app no arrancaba)

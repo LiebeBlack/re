@@ -1,19 +1,22 @@
 # Musik Player
 
-Reproductor de música offline de escritorio con interfaz gráfica moderna y elegante.
+Reproductor de música offline de escritorio con interfaz gráfica **ultra moderna**.
 
 ## Características
 
-- **Interfaz gráfica moderna**: Estilo dark/premium usando CustomTkinter con múltiples temas
+- **Interfaz ultra moderna**: Estilo neón/glass con CustomTkinter y **6 temas oscuros + 1 claro** con cambio en vivo desde el header (o con la tecla `T`)
+- **Dinamismo**: Ecualizador animado en la pista en reproducción, botón de play circular con resplandor pulsante, animaciones de hover (escala) y transiciones suaves
 - **Reproducción offline**: Sin necesidad de conexión a internet
 - **Soporte para múltiples formatos**: MP3, WAV, OGG, FLAC
-- **Controles completos**: Play/Pause, Siguiente, Anterior, Volumen, Barra de progreso
+- **Controles completos**: Play/Pause, Siguiente, Anterior, Volumen (con porcentaje en vivo), Barra de progreso
 - **Gestión de playlist**: Agregar, remover, buscar y organizar pistas
 - **Modos de reproducción**: Shuffle y Repeat (Off, All, One)
-- **Persistencia**: Guarda automáticamente tu playlist y configuración
+- **Persistencia**: Guarda automáticamente tu playlist, tema, volumen y configuración
 - **Extracción de metadatos**: Información de artista, álbum, título, etc.
 - **Atajos de teclado**: Control total desde el teclado
 - **Búsqueda en playlist**: Filtra rápidamente tus canciones
+- **Responsividad**: El layout se adapta a la ventana (modo compacto automático, títulos con elipsis, playlist expandible)
+- **Extras**: Tooltips en todos los controles, tarjeta "Now Playing" con portada e inicial, barra de estado con estado/duración total
 - **Diseño ligero y optimizado**: Rendimiento eficiente
 
 ## Requisitos del Sistema
@@ -79,6 +82,7 @@ python src/main.py
 - **S**: Toggle Shuffle
 - **R**: Toggle Repeat
 - **L**: Cargar archivos
+- **T**: Ciclar entre temas
 - **F**: Pantalla completa
 - **Escape**: Salir de pantalla completa
 - **Q**: Cerrar aplicación
@@ -97,10 +101,12 @@ musik-player/
 ├── src/
 │   ├── main.py                   # Punto de entrada principal
 │   ├── ui/                       # Módulos de interfaz gráfica
-│   │   ├── main_window.py        # Ventana principal
+│   │   ├── main_window.py        # Ventana principal (layout, temas, estado)
 │   │   ├── player_controls.py    # Controles de reproducción
 │   │   ├── playlist_view.py      # Vista de playlist
-│   │   └── styles.py             # Estilos y temas
+│   │   ├── styles.py             # Temas, colores y helpers de color
+│   │   ├── animations.py         # Motor de animaciones (tweens, pulso, hover)
+│   │   └── widgets.py            # Widgets reutilizables (tooltip, visualizador)
 │   ├── audio/                    # Módulos de audio
 │   │   ├── player.py             # Motor de reproducción
 │   │   └── playlist_manager.py   # Gestión de playlist
