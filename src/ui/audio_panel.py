@@ -10,6 +10,7 @@ Incluye:
     buffer, sample rate, profundidad), normalización y motor HQ.
 """
 
+import tkinter as tk
 from typing import Callable, Dict, List, Optional
 
 import customtkinter as ctk
@@ -76,12 +77,18 @@ class MetaChips(ctk.CTkFrame):
             parts.append(("HQ EQ", Styles.ACCENT_COLOR))
 
         for text, color in parts:
+            if color is None:
+                bg = Styles.BUTTON_COLOR
+                fg = Styles.TEXT_SECONDARY
+            else:
+                bg = blend_colors(color, Styles.PRIMARY_COLOR, 0.7)
+                fg = Styles.readable_on(bg)  # texto legible sobre la píldora tintada
             chip = ctk.CTkLabel(
                 self,
                 text=text,
                 font=Styles.SMALL_FONT,
-                text_color=color or Styles.TEXT_SECONDARY,
-                fg_color=Styles.BUTTON_COLOR if color is None else blend_colors(color, Styles.PRIMARY_COLOR, 0.7),
+                text_color=fg,
+                fg_color=bg,
                 corner_radius=8,
             )
             chip.pack(side="left", padx=(0, 4), pady=2)
@@ -122,6 +129,7 @@ class EqPanel(ctk.CTkFrame):
         self._hp_filter = False
         self._preamp = 0.0
         self._busy = False  # evita loops al programar presets
+        self._emit_after_id: Optional[str] = None  # debounce de cambios
 
         self._build_ui()
 
@@ -225,8 +233,34 @@ class EqPanel(ctk.CTkFrame):
     # -- Handlers --------------------------------------------------------
 
     def _emit(self) -> None:
-        """Notifica el cambio de configuración al exterior."""
+        """Notifica el cambio al exterior con debounce (coalesce).
+
+        Al arrastrar un slider, el command se dispara decenas de veces por
+        segundo y cada evento reprocesaría la pista completa (decode + EQ),
+        saturando la UI. Se espera ~120 ms de inactividad antes de emitir.
+        """
         if self._busy:
+            return
+        if self._emit_after_id is not None:
+            try:
+                self.after_cancel(self._emit_after_id)
+            except tk.TclError:
+                pass
+        try:
+            self._emit_after_id = self.after(120, self._emit_now)
+        except tk.TclError:
+            # Widget en destrucción: emitir de inmediato (o descartar)
+            self._emit_now()
+
+    def _emit_now(self) -> None:
+        """Envía el estado actual al exterior (hilo principal)."""
+        self._emit_after_id = None
+        if self._busy:
+            return
+        try:
+            if not self.winfo_exists():
+                return
+        except tk.TclError:
             return
         if self._on_change:
             self._on_change({
@@ -328,7 +362,11 @@ class AudioSettingsPopup(ctk.CTkToplevel):
         super().__init__(master)
         self.title("Configuración de audio")
         self.resizable(False, False)
-        self._on_apply = on_apply
+        # Nota: el callback se guarda con otro nombre para no pisar el
+        # método _on_apply() que ejecuta el botón "Aplicar" (regresión:
+        # al guardarlo como self._on_apply el botón llamaba al callback
+        # sin argumentos y fallaba con TypeError).
+        self._apply_callback = on_apply
         self._presets = presets or {}
 
         try:
@@ -360,7 +398,9 @@ class AudioSettingsPopup(ctk.CTkToplevel):
 
         drivers = ["auto", "wasapi", "directsound", "dsound", "winmm", "alsa", "pulseaudio", "dummy"]
         self._driver_menu = self._make_menu(row1, "Driver", drivers, current.get("audio_driver", "auto"), 150)
-        self._rate_menu = self._make_menu(row1, "Sample rate", ["44100", "48000"], str(current.get("sample_rate", 48000)), 110)
+        self._rate_menu = self._make_menu(
+            row1, "Sample rate", ["44100", "48000", "88200", "96000"],
+            str(current.get("sample_rate", 48000)), 110)
 
         row2 = ctk.CTkFrame(box, fg_color="transparent")
         row2.pack(fill="x", padx=10, pady=(4, 8))
@@ -449,6 +489,6 @@ class AudioSettingsPopup(ctk.CTkToplevel):
             "hq_engine": bool(self._hq_switch.get()),
             "normalization": self._norm_menu.get(),
         }
-        if self._on_apply:
-            self._on_apply(settings)
+        if self._apply_callback:
+            self._apply_callback(settings)
         self.destroy()

@@ -249,6 +249,30 @@ class TestAudioPlayerHq(unittest.TestCase):
         finally:
             player.cleanup()
 
+    def test_hq_mono_track_matches_mixer_channels(self):
+        """Pistas mono (N,1) deben adaptarse a los canales del mixer."""
+        mono_path = self.tmp_dir / "mono.wav"
+        sr = 44100
+        t = np.arange(int(sr * 1.0)) / sr
+        sf.write(str(mono_path), (0.4 * np.sin(2 * np.pi * 330 * t)).astype(np.float32),
+                 sr, subtype="PCM_16")
+        player = self._player()
+        try:
+            self.assertTrue(player.load(str(mono_path), duration_hint=1.0))
+            self.assertTrue(self._wait_ready(player))
+            self.assertTrue(player.hq_buffer_ready())
+            self.assertTrue(player.accept_hq_buffer())
+            self.assertTrue(player.is_hq())
+            self.assertTrue(player.play())
+            time.sleep(0.3)
+            self.assertGreaterEqual(player.get_position(), 0.0)
+            # Seek con offset sobre buffer mono tambien debe adaptar canales
+            self.assertTrue(player.seek(0.5))
+            time.sleep(0.3)
+            self.assertGreaterEqual(player.get_position(), 0.5)
+        finally:
+            player.cleanup()
+
     def test_hq_play_seek_pause_end(self):
         player = self._player()
         try:
@@ -305,6 +329,33 @@ class TestAudioPlayerHq(unittest.TestCase):
             self.assertTrue(self._wait_ready(player))
             self.assertTrue(player.hq_buffer_ready())
             self.assertTrue(player.accept_hq_buffer())
+        finally:
+            player.cleanup()
+
+    def test_reprocess_resumes_with_seek_no_deadlock(self):
+        """Reprocesar sonando a >0.5s reanuda con seek sin auto-bloquearse.
+
+        Regresión: accept_hq_buffer() -> seek() re-adquiere self._lock desde
+        el mismo hilo; con threading.Lock() normal esto es un deadlock
+        determinista (el hilo de posición queda colgado).
+        """
+        player = self._player()
+        try:
+            player.load(self.path, duration_hint=2.0)
+            self.assertTrue(self._wait_ready(player))
+            self.assertTrue(player.accept_hq_buffer())
+            self.assertTrue(player.play())
+            time.sleep(0.9)  # pos > 0.5 -> fija seek_after_ready
+            self.assertGreater(player.get_position(), 0.5)
+
+            player.update_dsp_settings({"eq_gains": [4, 4, 4, 0, 0, 0, 0, 0, 0, 0]})
+            self.assertEqual(player.get_state(), PlayerState.LOADING)
+            self.assertTrue(self._wait_ready(player))
+            self.assertTrue(player.accept_hq_buffer())  # auto-seek dentro
+            time.sleep(0.3)
+            # Reanudado cerca de la posición original, no desde cero
+            self.assertEqual(player.get_state(), PlayerState.PLAYING)
+            self.assertGreater(player.get_position(), 0.7)
         finally:
             player.cleanup()
 

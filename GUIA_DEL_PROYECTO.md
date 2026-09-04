@@ -36,9 +36,9 @@ musik/
 │   │   ├── main_window.py   # Ventana principal (layout, temas, estado)
 │   │   ├── player_controls.py  # Controles de reproducción
 │   │   ├── playlist_view.py    # Vista de lista de reproducción
+│   │   ├── audio_panel.py     # Chips de metadatos, EQ y configuración
 │   │   ├── styles.py          # Temas, colores y helpers de color
-│   │   ├── animations.py      # Motor de animaciones (tweens, pulso, hover)
-│   │   └── widgets.py         # Widgets reutilizables (tooltip, visualizador)
+│   │   └── widgets.py         # Widgets reutilizables (tooltip, visualizador, onda)
 │   ├── audio/                # Módulos de audio
 │   │   ├── __init__.py
 │   │   ├── player.py         # Motor de reproducción

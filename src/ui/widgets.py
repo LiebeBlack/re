@@ -4,7 +4,9 @@ Widgets - Componentes UI modernos y reutilizables.
 Incluye:
   * Tooltip: ayuda contextual flotante al pasar el ratón.
   * Visualizer: ecualizador animado (canvas) que reacciona a play/pause.
-  * CoverBadge: portada circular con la inicial de la pista y gradiente.
+  * CoverBadge: portada cuadrada redondeada con la inicial y gradiente.
+  * AlbumArt: carátula real (Pillow) con fallback automático al badge.
+  * WaveformView: forma de onda (picos min/max) con cabezal en vivo.
   * EllipsisLabel: label que trunca el texto con "…" según su ancho real.
 """
 
@@ -116,7 +118,7 @@ class Visualizer(tk.Canvas):
     Ecualizador de barras dibujado en un Canvas.
 
     Cuando está reproduciendo, las barras bailan con una onda
-    pseudoaleatoria suave (~25 fps). En pausa/stop quedan en un nivel
+    pseudoaleatoria suave (~16 fps). En pausa/stop quedan en un nivel
     bajo estático. Los colores de las barras usan el tema actual.
     """
 
@@ -177,6 +179,10 @@ class Visualizer(tk.Canvas):
     def is_playing(self) -> bool:
         """Retorna True si la animación está activa."""
         return self._playing
+
+    def refresh(self) -> None:
+        """Redibuja el canvas inmediatamente (útil al cambiar su fondo)."""
+        self._redraw()
 
     # -- Ciclo de animación ------------------------------------------------
 

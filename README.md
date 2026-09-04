@@ -4,8 +4,8 @@ Reproductor de música offline de escritorio con interfaz gráfica **ultra moder
 
 ## Características
 
-- **Interfaz ultra moderna**: Estilo neón/glass con CustomTkinter y **6 temas oscuros + 1 claro** con cambio en vivo desde el header (o con la tecla `T`)
-- **Dinamismo**: Ecualizador animado en la pista en reproducción, botón de play circular con resplandor pulsante, animaciones de hover (escala) y transiciones suaves
+- **Interfaz ultra moderna**: Estilo neón/glass con CustomTkinter y **8 temas** (7 oscuros + 1 claro) con cambio en vivo desde el header (o con la tecla `T`)
+- **Dinamismo**: Ecualizador animado en la pista en reproducción, forma de onda con cabezal en vivo y botón de play circular destacado con el acento del tema — los controles nunca se mueven, se escalan ni se animan solos (solo hover por color)
 - **Reproducción offline**: Sin necesidad de conexión a internet
 - **Soporte para múltiples formatos**: MP3, WAV, OGG, FLAC
 - **Controles completos**: Play/Pause, Siguiente, Anterior, Volumen (con porcentaje en vivo), Barra de progreso
@@ -104,9 +104,9 @@ musik-player/
 │   │   ├── main_window.py        # Ventana principal (layout, temas, estado)
 │   │   ├── player_controls.py    # Controles de reproducción
 │   │   ├── playlist_view.py      # Vista de playlist
+│   │   ├── audio_panel.py        # Chips de metadatos, EQ y configuración
 │   │   ├── styles.py             # Temas, colores y helpers de color
-│   │   ├── animations.py         # Motor de animaciones (tweens, pulso, hover)
-│   │   └── widgets.py            # Widgets reutilizables (tooltip, visualizador)
+│   │   └── widgets.py            # Widgets reutilizables (tooltip, visualizador, onda)
 │   ├── audio/                    # Módulos de audio
 │   │   ├── player.py             # Motor de reproducción
 │   │   └── playlist_manager.py   # Gestión de playlist

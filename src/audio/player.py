@@ -59,6 +59,28 @@ END_IDLE_TICKS = 8
 POSITION_MIN_FOR_END = 0.5
 
 
+def _sound_from_int16(data) -> pygame.mixer.Sound:
+    """Convierte un buffer int16 a Sound de pygame adaptando los canales.
+
+    El mixer se inicializa con 2 canales (estéreo), pero las pistas pueden
+    llegar mono (N,1) o incluso 1-D; pygame.sndarray exige que el número de
+    canales del array coincida con el del mixer ("Array depth must match
+    number of mixer channels"), así que el buffer se duplica a estéreo o se
+    reduce a mono según corresponda antes de crear el Sound.
+    """
+    import numpy as np
+
+    init = pygame.mixer.get_init()
+    mixer_channels = init[2] if init else 2
+    if data.ndim == 1:
+        data = data.reshape(-1, 1)
+    if data.shape[1] == 1 and mixer_channels == 2:
+        data = np.repeat(data, 2, axis=1)
+    elif data.shape[1] == 2 and mixer_channels == 1:
+        data = np.mean(data, axis=1, keepdims=True).astype(np.int16)
+    return pygame.sndarray.make_sound(np.ascontiguousarray(data))
+
+
 class PlayerState(Enum):
     """Estados del reproductor de audio."""
     STOPPED = "stopped"
@@ -119,7 +141,10 @@ class AudioPlayer:
         self._on_error: Optional[Callable[[str], None]] = None
         self._on_track_ready: Optional[Callable[[], None]] = None  # decode HQ listo
 
-        self._lock = threading.Lock()
+        # RLock: accept_hq_buffer() -> seek() re-adquiere el lock desde el
+        # mismo hilo (auto-resume tras reprocesar EQ). Un Lock normal se
+        # auto-bloquea aquí (deadlock determinista con el hilo de posición).
+        self._lock = threading.RLock()
 
         self._init_mixer()
 
@@ -385,7 +410,7 @@ class AudioPlayer:
             if data is None:
                 return False
             try:
-                sound = pygame.sndarray.make_sound(data)
+                sound = _sound_from_int16(data)
                 self._dsp_sound = sound
                 # Reservar un canal dedicado para la reproducción HQ
                 if self._dsp_channel is None:
@@ -503,7 +528,7 @@ class AudioPlayer:
                 chunk = self._dsp_int16[start:]
                 if chunk.shape[0] == 0:
                     return False
-                sound = pygame.sndarray.make_sound(chunk)
+                sound = _sound_from_int16(chunk)
             else:
                 sound = self._dsp_sound
             self._dsp_channel.play(sound)

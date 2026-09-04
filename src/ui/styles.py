@@ -9,7 +9,8 @@ Este módulo centraliza toda la identidad visual de la aplicación:
 
 Los temas antiguos (dark_premium, dark_blue, dark_purple, light) se
 conservan para mantener compatibilidad con configuraciones guardadas,
-y se añaden nuevos temas: ocean, aurora, sunset y emerald.
+y se añaden nuevos temas: sunset, emerald, slate y ruby. En total hay
+8 temas: 7 oscuros + 1 claro (Light).
 """
 
 import customtkinter as ctk
@@ -86,6 +87,41 @@ def lighten(color: str, amount: float = 0.15) -> str:
 def darken(color: str, amount: float = 0.15) -> str:
     """Oscurece un color mezclándolo con negro."""
     return blend_colors(color, "#000000", max(0.0, min(1.0, amount)))
+
+
+def _relative_luminance(hex_color: str) -> float:
+    """Luminancia relativa WCAG de un color hex (0.0 negro - 1.0 blanco)."""
+    r, g, b = [c / 255.0 for c in hex_to_rgb(hex_color)]
+
+    def _lin(v: float) -> float:
+        return v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4
+
+    r, g, b = _lin(r), _lin(g), _lin(b)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast_ratio(color_a: str, color_b: str) -> float:
+    """Contraste WCAG entre dos colores hex (1.0 = sin contraste)."""
+    l1 = _relative_luminance(color_a)
+    l2 = _relative_luminance(color_b)
+    if l1 < l2:
+        l1, l2 = l2, l1
+    return (l1 + 0.05) / (l2 + 0.05)
+
+
+def readable_on(bg_color: str) -> str:
+    """
+    Texto (#0b1020 o blanco) con el MEJOR contraste sobre bg_color.
+
+    Los acentos claros (cielo, esmeralda, lavanda) con texto blanco daban
+    ratios de ~1.9-2.7:1 (ilegible); con texto oscuro suben a 7-12:1.
+    Los acentos oscuros (violeta, carmesí) siguen usando blanco.
+    """
+    dark = "#0b1020"
+    light = "#ffffff"
+    if contrast_ratio(dark, bg_color) >= contrast_ratio(light, bg_color):
+        return dark
+    return light
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +305,7 @@ class Theme:
         "gradient_a": "#6366f1",
         "gradient_b": "#0ea5e9",
         "text": "#16181f",
-        "text_secondary": "#6b7280",
+        "text_secondary": "#5b6470",  # 4.9-6.0:1 sobre primary/secondary/button/card
         "button": "#e5e9f2",
         "button_hover": "#d3d9e6",
         "progress": "#6366f1",
@@ -279,10 +315,6 @@ class Theme:
         "warning": "#f59e0b",
         "error": "#ef4444",
     }
-
-    # Alias del tema insignia (nombre moderno, misma paleta)
-    MIDNIGHT = DARK_PREMIUM
-    OCEAN = DARK_BLUE
 
     # Nombre visible → clave del tema (para el selector de la UI)
     DISPLAY_NAMES: Dict[str, str] = {
@@ -409,6 +441,11 @@ class Styles:
         cls.WARNING_COLOR = theme["warning"]
         cls.ERROR_COLOR = theme["error"]
 
+    @staticmethod
+    def readable_on(bg_color: str) -> str:
+        """Texto con el mejor contraste (oscuro o blanco) sobre bg_color."""
+        return readable_on(bg_color)
+
     @classmethod
     def get_current_theme(cls) -> str:
         """Retorna el nombre del tema actual."""
@@ -463,7 +500,7 @@ class Styles:
             "accent": {
                 "fg_color": cls.ACCENT_COLOR,
                 "hover_color": cls.ACCENT_HOVER,
-                "text_color": "#ffffff",
+                "text_color": readable_on(cls.ACCENT_COLOR),
                 "corner_radius": 10,
                 "font": cls.NORMAL_FONT,
             },
@@ -477,21 +514,21 @@ class Styles:
             "success": {
                 "fg_color": cls.SUCCESS_COLOR,
                 "hover_color": lighten(cls.SUCCESS_COLOR, 0.1),
-                "text_color": "#ffffff",
+                "text_color": readable_on(cls.SUCCESS_COLOR),
                 "corner_radius": 10,
                 "font": cls.NORMAL_FONT,
             },
             "warning": {
                 "fg_color": cls.WARNING_COLOR,
                 "hover_color": lighten(cls.WARNING_COLOR, 0.1),
-                "text_color": "#ffffff",
+                "text_color": readable_on(cls.WARNING_COLOR),
                 "corner_radius": 10,
                 "font": cls.NORMAL_FONT,
             },
             "error": {
                 "fg_color": cls.ERROR_COLOR,
                 "hover_color": lighten(cls.ERROR_COLOR, 0.1),
-                "text_color": "#ffffff",
+                "text_color": readable_on(cls.ERROR_COLOR),
                 "corner_radius": 10,
                 "font": cls.NORMAL_FONT,
             },

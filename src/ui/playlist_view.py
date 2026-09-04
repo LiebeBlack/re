@@ -9,17 +9,23 @@ Incluye:
   * Contador en forma de píldora con resultado de búsqueda.
 """
 
+import tkinter as tk
 from functools import partial
 from typing import Callable, List, Optional
 
 import customtkinter as ctk
 
-from src.ui.styles import Styles, lighten
+from src.ui.styles import Styles, darken, lighten
 from src.ui.widgets import Visualizer, EllipsisLabel, Tooltip
 
 
 class PlaylistView(ctk.CTkFrame):
     """Frame que muestra la lista de reproducción."""
+
+    # Ancho de la columna del indicador (ecualizador mini o número):
+    # fijo e idéntico en todas las filas para que los títulos queden
+    # alineados y no "salten" al cambiar la pista en reproducción.
+    INDICATOR_WIDTH = 40
 
     def __init__(self, master, **kwargs):
         """
@@ -40,6 +46,9 @@ class PlaylistView(ctk.CTkFrame):
         # Indicador animado de la pista en reproducción
         self._current_viz: Optional[Visualizer] = None
         self._playing_state = False
+        # Posición de scroll guardada antes de reconstruir las filas
+        # (para que la lista no "salte" al cambiar de pista o de tema)
+        self._pending_scroll: Optional[float] = None
 
         self._setup_ui()
 
@@ -65,7 +74,7 @@ class PlaylistView(ctk.CTkFrame):
 
         self._count_label = ctk.CTkLabel(
             header_frame,
-            text="0 tracks",
+            text="0 pistas",
             font=Styles.SMALL_FONT,
             text_color=Styles.TEXT_SECONDARY,
             fg_color=Styles.SECONDARY_COLOR,
@@ -142,7 +151,14 @@ class PlaylistView(ctk.CTkFrame):
         is_current = track_data["is_current"]
 
         base_bg = Styles.CARD_COLOR if is_current else "transparent"
-        hover_bg = lighten(Styles.CARD_COLOR, 0.06) if is_current else Styles.BUTTON_COLOR
+        if is_current:
+            # En el tema claro la tarjeta es blanca: el hover debe OSCURECER
+            # (aclarar blanco no produce ningún cambio visible).
+            hover_bg = (darken(Styles.CARD_COLOR, 0.06)
+                        if Styles.get_current_theme() == "light"
+                        else lighten(Styles.CARD_COLOR, 0.06))
+        else:
+            hover_bg = Styles.BUTTON_COLOR
 
         # Fila tarjeta
         row = ctk.CTkFrame(
@@ -153,9 +169,12 @@ class PlaylistView(ctk.CTkFrame):
         row.pack(fill="x", pady=2)
         row.grid_columnconfigure(1, weight=1)  # info expande
 
-        # Columna 0: indicador de reproducción o número de pista
+        # Columna 0: indicador de reproducción o número de pista.
+        # El ancho es idéntico en ambos casos (INDICATOR_WIDTH) para que
+        # todas las filas alineen los títulos aunque cambie la pista actual.
         if is_current:
-            viz = Visualizer(row, bars=6, height=22, bg=Styles.CARD_COLOR, bar_width=4)
+            viz = Visualizer(row, bars=6, height=22, width=self.INDICATOR_WIDTH,
+                             bg=Styles.CARD_COLOR, bar_width=4)
             viz.grid(row=0, column=0, padx=(10, 4), pady=10)
             viz.set_playing(self._playing_state)
             self._current_viz = viz
@@ -166,7 +185,7 @@ class PlaylistView(ctk.CTkFrame):
                 text=f"{index + 1}",
                 font=Styles.MONO_FONT,
                 text_color=Styles.TEXT_SECONDARY,
-                width=34,
+                width=self.INDICATOR_WIDTH,
             )
             index_label.grid(row=0, column=0, padx=(10, 2), pady=10)
             indicator = index_label
@@ -240,20 +259,41 @@ class PlaylistView(ctk.CTkFrame):
         """
         Aplica resaltado al pasar el ratón sobre la fila.
 
+        El fondo de los Canvas embebidos (mini ecualizador de la pista
+        actual) también cambia, para que no quede un parche de color
+        distinto dentro de la fila resaltada.
+
         Args:
             row: Frame de la fila.
             hover_bg: Color de fondo en hover.
             normal_bg: Color de fondo en reposo.
         """
+        children = PlaylistView._all_children(row)
+
+        def _set_bg(color: str) -> None:
+            try:
+                if row.cget("fg_color") != color:
+                    row.configure(fg_color=color)
+            except tk.TclError:
+                pass
+            for child in children:
+                if isinstance(child, Visualizer):
+                    try:
+                        if child.cget("bg") != color:
+                            child.configure(bg=color)
+                            child.refresh()
+                    except tk.TclError:
+                        pass
+
         def _hover(event=None) -> None:
             try:
-                row.configure(fg_color=hover_bg)
+                _set_bg(hover_bg)
             except Exception:
                 pass
 
         def _leave(event=None) -> None:
             try:
-                row.configure(fg_color=normal_bg)
+                _set_bg(normal_bg)
             except Exception:
                 pass
 
@@ -261,7 +301,7 @@ class PlaylistView(ctk.CTkFrame):
         row.bind("<Leave>", _leave, add="+")
         # Los hijos no tienen su propio fondo, pero el Enter/Leave de cada
         # uno dispara el resaltado sin parpadeos.
-        for child in self._all_children(row):
+        for child in children:
             child.bind("<Enter>", _hover, add="+")
             child.bind("<Leave>", _leave, add="+")
 
@@ -292,7 +332,8 @@ class PlaylistView(ctk.CTkFrame):
                 pass
 
     def clear(self) -> None:
-        """Limpia la vista de playlist."""
+        """Limpia la vista de playlist (recuerda el scroll para restaurarlo)."""
+        self._capture_scroll()
         for frame in self._track_frames:
             frame.destroy()
         self._track_frames.clear()
@@ -301,29 +342,45 @@ class PlaylistView(ctk.CTkFrame):
         self._current_viz = None
         self._update_count(0)
 
-    def update_track(self, index: int, is_current: bool) -> None:
-        """
-        Actualiza el estilo de una pista sin reconstruir la lista.
+    # ------------------------------------------------------------------
+    # Preservación de scroll entre reconstrucciones
+    # ------------------------------------------------------------------
 
-        Args:
-            index: Índice de la pista a actualizar.
-            is_current: True si ahora es la pista actual.
+    def _capture_scroll(self) -> None:
+        """Guarda la fracción vertical actual del área scrollable.
+
+        Al destruir y recrear todas las filas (cambio de pista, de tema o
+        de búsqueda) el canvas se vacía y Tk vuelve al principio: la lista
+        "saltaría" arriba si el usuario estaba viendo una zona inferior.
         """
-        for row_info in self._row_data:
-            if row_info["index"] != index:
-                continue
-            row = row_info["frame"]
-            title_label = row_info["title_label"]
-            try:
-                if is_current:
-                    row.configure(fg_color=Styles.CARD_COLOR)
-                    title_label.configure(text_color=Styles.ACCENT_COLOR)
-                else:
-                    row.configure(fg_color="transparent")
-                    title_label.configure(text_color=Styles.TEXT_COLOR)
-            except Exception:
-                pass
+        try:
+            canvas = self._scrollable_frame._parent_canvas
+            self._pending_scroll = float(canvas.yview()[0])
+        except Exception:
+            self._pending_scroll = None
+
+    def _schedule_scroll_restore(self) -> None:
+        """Programa la restauración del scroll tras repoblar las filas."""
+        if self._pending_scroll is None:
             return
+        try:
+            self.after_idle(self._restore_scroll)
+        except tk.TclError:
+            self._pending_scroll = None
+
+    def _restore_scroll(self) -> None:
+        """Vuelve a la fracción de scroll guardada (si sigue siendo válida)."""
+        try:
+            fraction = self._pending_scroll
+            self._pending_scroll = None
+            if fraction is None:
+                return
+            canvas = self._scrollable_frame._parent_canvas
+            # Clamp: si la lista ahora es más corta, quedarse en 0
+            fraction = max(0.0, min(1.0, fraction))
+            canvas.yview_moveto(fraction)
+        except Exception:
+            self._pending_scroll = None
 
     def update_count(self, count: int) -> None:
         """Actualiza el contador de pistas."""
@@ -331,7 +388,7 @@ class PlaylistView(ctk.CTkFrame):
 
     def _update_count(self, count: int) -> None:
         """Actualiza el label de conteo."""
-        self._count_label.configure(text=f"{count} track{'s' if count != 1 else ''}")
+        self._count_label.configure(text=f"{count} pista{'s' if count != 1 else ''}")
 
     # ------------------------------------------------------------------
     # Formato
@@ -360,12 +417,14 @@ class PlaylistView(ctk.CTkFrame):
         """Re-aplica el filtro de búsqueda activo tras refrescar la lista."""
         if self._search_entry.get():
             self._on_search()
+        self._schedule_scroll_restore()
 
     def _on_search(self) -> None:
         """Maneja la búsqueda en la playlist (filtrado en vivo)."""
         search_text = self._search_entry.get().lower()
 
-        # Limpiar vista actual
+        # Limpiar vista actual (recordando el scroll para restaurarlo)
+        self._capture_scroll()
         for frame in self._track_frames:
             frame.destroy()
         self._track_frames.clear()
@@ -383,9 +442,11 @@ class PlaylistView(ctk.CTkFrame):
         visible_count = len(self._track_frames)
         total_count = len(self._current_tracks)
         if search_text:
-            self._count_label.configure(text=f"{visible_count}/{total_count} tracks")
+            self._count_label.configure(text=f"{visible_count}/{total_count} pistas")
         else:
-            self._count_label.configure(text=f"{total_count} tracks")
+            self._count_label.configure(text=f"{total_count} pistas")
+        # Restaurar la posición de scroll (filtrado en vivo sin saltos)
+        self._schedule_scroll_restore()
 
     # ------------------------------------------------------------------
     # Callbacks

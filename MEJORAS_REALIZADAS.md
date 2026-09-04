@@ -4,6 +4,120 @@
 
 Se ha mejorado significativamente el código para hacerlo más robusto, completo y profesional. Se han agregado múltiples funcionalidades faltantes y se ha preparado el proyecto para release en GitHub.
 
+## Mejoras Recientes (Versión 2.4.0) - Playlist y responsividad sin saltos
+
+- **La playlist ya no salta al principio**: al destruir y recrear las
+  filas (cambio automático de pista, cambio de tema o limpieza), el scroll
+  se guarda antes y se restaura después (`_capture_scroll` /
+  `_restore_scroll` en `playlist_view.py`). Antes, si estabas viendo una
+  zona inferior de una lista larga, al pasar a la siguiente pista la vista
+  volvía arriba de golpe.
+- **Histéresis en el modo compacto**: redimensionar justo en el umbral de
+  860 px emitía múltiples eventos `<Configure>` con ±1 px y los botones de
+  acción alternaban su texto (largo/corto) sin parar. Ahora solo cambian
+  con ±16 px de margen alrededor del umbral.
+- **Limpieza línea a línea**: eliminados los alias de tema sin uso
+  (`MIDNIGHT`/`OCEAN`) y corregidas referencias/documentos obsoletos
+  (conteo de temas 7 oscuros + 1 claro, árbol de módulos sin
+  `animations.py`, listado de temas en el docstring de `styles.py`).
+- **El ecualizador oculto ya no anima**: en modo HQ se muestra la forma
+  de onda y el visualizador de barras queda `grid_remove`; antes
+  `_update_ui_state` lo seguía poniendo en marcha igualmente (canvas
+  invisible redibujándose en bucle = CPU quemada sin verse). Ahora solo
+  se anima si está mapeado (`winfo_ismapped`).
+- **Minimizar/restaurar la ventana**: al minimizar se detiene la
+  animación del ecualizador (Tk desmapea los widgets) y al restaurar se
+  reanuda si sigue sonando (eventos `<Map>`/`<Unmap>`).
+
+---
+
+## Mejoras Recientes (Versión 2.3.0) - Controles 100% estables (sin auto-animación)
+
+- **Botón de play sin animación automática**: eliminado el "glow pulsante"
+  que repintaba el botón ~33 veces por segundo mientras sonaba (se percibía
+  como parpadeo / "el botón hace cosas solo"). Ahora el botón usa el acento
+  del tema de forma estática y solo cambia su glifo ▶/⏸ y el hover nativo.
+- **`animations.py` eliminado**: con el glow fuera, `Pulse`/`Tween`/hover
+  quedaron sin uso real; el módulo se eliminó para no reintroducir nunca
+  animaciones automáticas en los controles.
+- **Sin reescrituras redundantes de texto**: los labels de tiempo, estado,
+  conteo y backend solo se actualizan si su texto cambió. Antes se
+  reconfiguraban con el MISMO texto varias veces por segundo mientras
+  sonaba, forzando redibujos inútiles que podían parpadear.
+
+---
+
+## Mejoras Recientes (Versión 2.2.0) - Estabilidad Visual (anti-glitch)
+
+Corrección de todos los "controles que se mueven solos": la UI ya no
+cambia geometrías en caliente, así que nada se desplaza ni oscila solo.
+
+- **Hover sin geometría** (`player_controls.py` / `animations.py`): se
+  eliminó `bind_hover_effect`, que escalaba el ANCHO de los botones al
+  pasar el ratón. Dentro de una fila `pack`, agrandar un botón empuja a
+  sus vecinos y el borde en movimiento re-dispara `Enter/Leave`, haciendo
+  que los controles "bailen" solos (a veces con el ratón quieto). Ahora el
+  hover usa el `hover_color` nativo de CTk: solo color, cero movimiento.
+- **Botón Repeat de ancho fijo**: su texto cambia al ciclar modos
+  (Repeat / Repeat All / Repeat One); antes el botón crecía y, como la
+  fila está centrada, también desplazaba al botón Shuffle. Ahora ambos
+  tienen ancho fijo y los modos no mueven nada al cambiar de estado.
+- **Icono de volumen con ancho fijo**: al cruzar los umbrales 🔇/🔉/🔊 el
+  icono cambiaba de ancho y empujaba "Volume" y el porcentaje; ahora su
+  ranura es fija (26 px) y nada se desplaza al variar el volumen.
+- **Playlist alineada**: la columna del indicador (mini ecualizador de la
+  pista actual o número) tiene ahora un ancho fijo idéntico (40 px) en
+  todas las filas, así los títulos quedan alineados y no "saltan" al
+  cambiar la pista en reproducción. El fondo del mini ecualizador también
+  se recolorea al hover de la fila (antes quedaba un parche de color
+  distinto dentro de la fila resaltada).
+- **Cambio de tema sin saltos**: reconstruir la UI con otro tema ya no
+  cierra el panel EQ abierto ni ensancha los botones si la ventana está en
+  modo compacto (se preservan ambos estados). El botón EQ también restaura
+  su color de texto al ocultar el panel.
+
+---
+
+## Mejoras Recientes (Versión 2.1.0) - Motor de Audio HQ y Estabilidad
+
+### 1. Motor de Alta Calidad (HQ/DSP)
+
+- **Doble backend** en `AudioPlayer`: STREAM (pygame.mixer.music, ligero, por defecto) y **HQ/DSP** (soundfile + numpy + pygame Channel) que decodifica la pista completa en un hilo secundario y aplica la cadena de máxima calidad: normalización (ReplayGain o Peak Gain), filtro paso-alto subsónico y **ecualizador gráfico de 10 bandas** (biquad RBJ) antes de convertir a int16.
+- **`src/audio/dsp.py` (nuevo)**: filtros biquad peaking/highpass, `read_track`, `replaygain_db`, `peak_gain_db`, `compute_waveform_peaks` y `compute_spectrum_profile` (análisis para la UI). numpy es opcional: si falta, el módulo importa igual y el motor cae a streaming sin romper la app.
+- **Configuración de salida** (`ConfigManager` + diálogo en UI): driver WASAPI/DirectSound/ALSA/Pulse, frecuencia de muestreo, tamaño de búfer (anti-cortes) y profundidad 16/32-bit.
+- **Cambio de ajustes en caliente**: EQ/normalización reprocesan la pista sonando y reanudan desde la posición (auto-resume con seek).
+
+### 2. Metadatos y Carátulas Ultra-Detallados
+
+- `MetadataExtractor` ampliado: formato, codec, bitrate, frecuencia de muestreo, canales, bit depth, duración y **carátula embebida** extraída a caché (PIL, opcional). `FileHandler` ampliado a FLAC/WAV/ALAC/AAC/MP3/OGG/OPUS/M4A/WMA.
+
+### 3. UI de Audio (compacta, integrada)
+
+- **`src/ui/audio_panel.py` (nuevo)**: chips técnicos de metadatos, panel EQ de 10 bandas + preamp + filtro paso-alto + presets, y diálogo de configuración de salida.
+- **Forma de onda real** (`WaveformView` + datos del decode HQ) con playhead, carátula real (`AlbumArt`) y visualizador espectral en la tarjeta Now Playing; nuevos temas Slate/Noir.
+
+### 4. Bugs Corregidos en esta Versión
+
+- **Pistas mono en HQ**: `pygame.sndarray.make_sound` fallaba con buffers mono frente a un mixer estéreo ("Array depth must match number of mixer channels") tanto al aceptar el buffer como al hacer seek. Nuevo helper `_sound_from_int16` que duplica/reduce canales según el mixer.
+- **Deadlock determinista al reprocesar EQ sonando**: `accept_hq_buffer()` llamaba a `seek()` re-adquiriendo `self._lock` desde el mismo hilo; con `threading.Lock` (no reentrante) se auto-bloqueaba y colgaba el hilo de posición. Ahora el lock es `threading.RLock`.
+- **Import de `dsp` con numpy ausente**: el import global de numpy rompía la app entera; ahora es opcional con guards por función (fallback limpio a streaming).
+- **Dependencias**: `requirements.txt` ahora incluye `numpy`, `soundfile` y `pillow` (necesarios para HQ/carátulas; PIL y numpy también son opcionales en runtime).
+
+### 5. Verificación
+
+- **69 tests** en verde (incluye regresiones nuevas: adaptación mono→estéreo con seek, y reproceso sin deadlock).
+- Smoke test E2E real de la ventana con pista mono: carga, tema en vivo, EQ on/off en caliente mientras suena, pause/play, seek, Repeat One y cierre limpio sin procesos colgados.
+
+### 6. Auditoría de UI (interacciones, animaciones y geometría)
+
+- **Bug crítico en el diálogo de audio**: el botón "Aplicar" crasheaba con `TypeError` porque el callback (`on_apply`) se guardaba en `self._on_apply`, pisando el método del mismo nombre que ejecuta el botón. Renombrado a `self._apply_callback`.
+- **Debounce del ecualizador**: arrastrar un slider disparaba el reproceso completo de la pista (decode + EQ) decenas de veces por segundo. Ahora los cambios se coalescen (~120 ms) y solo se reprocesa al detenerse el gesto. De paso se corrigió un `def _emit` que había quedado fusionado con una línea de comentario.
+- **Barra de progreso "congelada"**: si se soltaba el ratón fuera del slider, `_is_seeking` quedaba en `True` y la UI dejaba de actualizar la posición. Ahora un handler global de `ButtonRelease` finaliza el seek (idempotente, sin re-seek doble).
+- **Limpieza** del bloque redundante en `Pulse._tick`.
+- **Auditoría automatizada (12/12)**: hover real con puntero (escala y restaura del botón play), pulso glow al reproducir (se detiene en pausa), transporte/volumen/modos, búsqueda en vivo, clic y borrado de filas, arrastre de progreso con liberación fuera del slider, EQ con debounce/presets/reset, reproducción HQ con forma de onda, popup de configuración aplicado de punta a punta, modo compacto responsive, ciclo de 8 temas con rebuild conservando estado, exportar M3U, atajos con playlist vacía y cierre sin excepciones ni procesos colgados. También se verificó por geometría real que los tiempos no se solapan con el visualizador ni la forma de onda.
+
+---
+
 ## Mejoras Recientes (Versión 2.0.0) - Rediseño Ultra Moderno
 
 ### 1. Sistema de Temas Ultra Modernos (`styles.py`)

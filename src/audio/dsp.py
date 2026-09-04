@@ -14,10 +14,22 @@ scipy es un requisito opcional: si no está disponible, el EQ se omite
 (se registra una advertencia) y el resto de funciones sigue funcionando.
 """
 
+from __future__ import annotations  # anotaciones sin evaluar (numpy opcional)
+
 from typing import Dict, List, Optional, Tuple
 
-import numpy as np
+try:  # numpy es opcional: sin él el módulo importa y el motor cae a streaming
+    import numpy as np
+    _HAS_NUMPY = True
+except Exception:  # pragma: no cover - entorno mínimo
+    np = None  # type: ignore[assignment]
+    _HAS_NUMPY = False
 
+
+def _require_numpy() -> None:
+    """Lanza ImportError si numpy no está disponible (fallback a streaming)."""
+    if np is None:
+        raise ImportError("numpy es necesario para el modo HQ")
 # Frecuencias centrales de las 10 bandas (estándar ISO)
 BAND_FREQS: List[float] = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
 
@@ -136,6 +148,7 @@ def apply_eq(
     Returns:
         Buffer procesado (misma forma). Sin scipy devuelve copia sin EQ.
     """
+    _require_numpy()
     if samples.size == 0:
         return samples
 
@@ -191,6 +204,7 @@ def read_track(file_path: str) -> Optional[Dict]:
         Dict con {'samples': np.ndarray float32 (N, ch), 'rate': int,
         'duration': float} o None si no se pudo decodificar.
     """
+    _require_numpy()
     try:
         import soundfile as sf
         data, rate = sf.read(file_path, dtype="float32", always_2d=True)
@@ -258,6 +272,7 @@ def peak_gain_db(samples: np.ndarray, target_db: float = -1.0) -> float:
     Returns:
         Ganancia a aplicar en dB.
     """
+    _require_numpy()
     peak = float(np.max(np.abs(samples))) if samples.size else 0.0
     if peak <= 1e-6:
         return 0.0
@@ -275,6 +290,7 @@ def to_int16(samples: np.ndarray) -> np.ndarray:
     Returns:
         Buffer int16 de la misma forma.
     """
+    _require_numpy()
     clipped = np.clip(samples, -1.0, 1.0)
     return (clipped * _MAX_INT16).astype(np.int16)
 
@@ -290,6 +306,7 @@ def compute_waveform_peaks(samples: np.ndarray, width: int) -> Tuple[np.ndarray,
     Returns:
         Tupla (mins, maxs) de numpy arrays de longitud `width`.
     """
+    _require_numpy()
     mono = samples
     if mono.ndim == 2:
         mono = np.mean(mono, axis=1)
@@ -330,6 +347,7 @@ def compute_spectrum_profile(samples: np.ndarray, fs: int,
     Returns:
         Array normalizado 0..1 con la energía de cada banda.
     """
+    _require_numpy()
     if samples.ndim == 2:
         mono = np.mean(samples, axis=1)
     else:

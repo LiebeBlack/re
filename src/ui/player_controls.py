@@ -2,19 +2,22 @@
 PlayerControls - Controles de reproducción ultra modernos para Musik Player.
 
 Incluye:
-  * Botón de play/pause circular con resplandor pulsante mientras suena.
-  * Botones con animación de escala al pasar el ratón.
+  * Botón de play/pause circular destacado con el acento del tema.
+  * Hover por color nativo de CTk (sin escalar ni animar: nada se mueve).
   * Slider de volumen con icono dinámico y porcentaje en vivo.
   * Botones de shuffle/repeat con estados visuales claros.
   * Tooltips en todos los controles.
+
+Regla de diseño: NINGÚN control se anima solo. El color de fondo, el texto
+y el tamaño solo cambian como respuesta directa del usuario (clic, hover,
+volumen, modos). No hay glows pulsantes ni repintados en bucle.
 """
 
 from typing import Callable, Optional
 
 import customtkinter as ctk
 
-from src.ui.styles import Styles, lighten
-from src.ui.animations import Pulse, bind_hover_effect
+from src.ui.styles import Styles
 from src.ui.widgets import Tooltip
 
 
@@ -37,9 +40,6 @@ class PlayerControls(ctk.CTkFrame):
         self._on_volume_change: Optional[Callable[[float], None]] = None
         self._on_shuffle: Optional[Callable[[], None]] = None
         self._on_repeat: Optional[Callable[[], None]] = None
-
-        # Pulso del botón de play (solo visible mientras se reproduce)
-        self._play_pulse: Optional[Pulse] = None
 
         self._setup_ui()
 
@@ -88,10 +88,10 @@ class PlayerControls(ctk.CTkFrame):
         )
         self._previous_btn.pack(side="left", padx=6)
         self._previous_btn.configure(command=self._on_previous_click)
-        bind_hover_effect(self._previous_btn, self)
         Tooltip(self._previous_btn, "Pista anterior  (←)")
 
-        # Botón Play/Pause (circular, con glow pulsante)
+        # Botón Play/Pause (circular, color del acento estático: no se
+        # anima solo, solo cambia el glifo ▶/⏸ y el hover nativo)
         self._play_pause_btn = ctk.CTkButton(
             transport_center,
             text="▶",
@@ -99,13 +99,12 @@ class PlayerControls(ctk.CTkFrame):
             height=76,
             corner_radius=38,
             fg_color=Styles.ACCENT_COLOR,
-            hover_color=Styles.ACCENT_COLOR,  # el glow lo controla el Pulse
-            text_color="#ffffff",
+            hover_color=Styles.ACCENT_HOVER,
+            text_color=Styles.readable_on(Styles.ACCENT_COLOR),
             font=("Segoe UI", 26),
         )
         self._play_pause_btn.pack(side="left", padx=6)
         self._play_pause_btn.configure(command=self._on_play_pause_click)
-        bind_hover_effect(self._play_pause_btn, self, grow=8)
         Tooltip(self._play_pause_btn, "Reproducir / Pausar  (Espacio)")
 
         # Botón Siguiente
@@ -118,7 +117,6 @@ class PlayerControls(ctk.CTkFrame):
         )
         self._next_btn.pack(side="left", padx=6)
         self._next_btn.configure(command=self._on_next_click)
-        bind_hover_effect(self._next_btn, self)
         Tooltip(self._next_btn, "Siguiente pista  (→)")
 
         # ------------------------------------------------------------
@@ -130,11 +128,15 @@ class PlayerControls(ctk.CTkFrame):
         volume_header = ctk.CTkFrame(volume_frame, fg_color="transparent")
         volume_header.pack(fill="x")
 
+        # Ancho fijo del icono: al cambiar 🔇/🔉/🔊 entre anchos distintos,
+        # el texto "Volume" y el porcentaje no deben desplazarse.
         self._volume_icon_label = ctk.CTkLabel(
             volume_header,
             text="🔊",
             font=Styles.NORMAL_FONT,
             text_color=Styles.TEXT_SECONDARY,
+            width=26,
+            anchor="w",
         )
         self._volume_icon_label.pack(side="left")
 
@@ -175,25 +177,26 @@ class PlayerControls(ctk.CTkFrame):
         self._shuffle_btn = ctk.CTkButton(
             modes_frame,
             text="🔀 Shuffle",
-            width=120,
+            width=176,
             height=34,
             **self._button_style("secondary", ("Segoe UI", 12)),
         )
         self._shuffle_btn.pack(side="left", padx=6)
         self._shuffle_btn.configure(command=self._on_shuffle_click)
-        bind_hover_effect(self._shuffle_btn, self, grow=4)
         Tooltip(self._shuffle_btn, "Reproducción aleatoria  (S)")
 
+        # Ancho FIJO del botón repeat: su texto cambia (Repeat / Repeat All /
+        # Repeat One) y, si el ancho variara, la fila centrada empujaría
+        # también al botón shuffle ("controles que se mueven solos").
         self._repeat_btn = ctk.CTkButton(
             modes_frame,
             text="🔁 Repeat",
-            width=140,
+            width=176,
             height=34,
             **self._button_style("secondary", ("Segoe UI", 12)),
         )
         self._repeat_btn.pack(side="left", padx=6)
         self._repeat_btn.configure(command=self._on_repeat_click)
-        bind_hover_effect(self._repeat_btn, self, grow=4)
         Tooltip(self._repeat_btn, "Repetir: Off / Todo / Una  (R)")
 
     # ------------------------------------------------------------------
@@ -299,35 +302,12 @@ class PlayerControls(ctk.CTkFrame):
         Args:
             is_playing: True si está reproduciendo, False si está pausado.
         """
-        if is_playing:
-            self._play_pause_btn.configure(text="⏸")
-            self._start_play_pulse()
-        else:
-            self._play_pause_btn.configure(text="▶")
-            self._stop_play_pulse()
-
-    def _start_play_pulse(self) -> None:
-        """Arranca el resplandor pulsante del botón de play."""
-        if self._play_pulse is None:
-            self._play_pulse = Pulse(
-                self,
-                lambda c: self._play_pause_btn.configure(fg_color=c),
-                base_color=Styles.ACCENT_COLOR,
-                pulse_color=lighten(Styles.ACCENT_COLOR, 0.35),
-                period_ms=800,
-            )
-        else:
-            self._play_pulse.set_colors(Styles.ACCENT_COLOR, lighten(Styles.ACCENT_COLOR, 0.35))
-        self._play_pulse.start()
-
-    def _stop_play_pulse(self) -> None:
-        """Detiene el resplandor y restaura el color base."""
-        if self._play_pulse is not None:
-            self._play_pulse.stop()
-
-    def stop_animations(self) -> None:
-        """Cancela todas las animaciones internas (cierre/rebuild)."""
-        self._stop_play_pulse()
+        text = "⏸" if is_playing else "▶"
+        try:
+            if self._play_pause_btn.cget("text") != text:
+                self._play_pause_btn.configure(text=text)
+        except Exception:
+            pass  # widget destruido (cierre/rebuild)
 
     def set_volume(self, volume: float) -> None:
         """
@@ -365,7 +345,7 @@ class PlayerControls(ctk.CTkFrame):
             self._shuffle_btn.configure(
                 fg_color=Styles.ACCENT_COLOR,
                 hover_color=Styles.ACCENT_HOVER,
-                text_color="#ffffff",
+                text_color=Styles.readable_on(Styles.ACCENT_COLOR),
             )
         else:
             self._shuffle_btn.configure(
@@ -393,7 +373,7 @@ class PlayerControls(ctk.CTkFrame):
                 text=text,
                 fg_color=Styles.ACCENT_COLOR,
                 hover_color=Styles.ACCENT_HOVER,
-                text_color="#ffffff",
+                text_color=Styles.readable_on(Styles.ACCENT_COLOR),
             )
         else:
             self._repeat_btn.configure(

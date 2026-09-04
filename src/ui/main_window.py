@@ -96,6 +96,8 @@ class MainWindow(ctk.CTk):
         self._setup_callbacks()
         self._setup_keyboard_shortcuts()
         self.bind("<Configure>", self._on_window_resize)
+        self.bind("<Map>", self._on_window_map)
+        self.bind("<Unmap>", self._on_window_unmap)
 
         self._load_saved_playlist()
 
@@ -132,11 +134,6 @@ class MainWindow(ctk.CTk):
 
     def _build_ui(self) -> None:
         """(Re)construye la interfaz. Usado al iniciar y al cambiar de tema."""
-        if hasattr(self, "_player_controls"):
-            try:
-                self._player_controls.stop_animations()
-            except Exception:
-                pass
         if hasattr(self, "_main_frame"):
             try:
                 if self._main_frame.winfo_exists():
@@ -209,7 +206,7 @@ class MainWindow(ctk.CTk):
         info.grid(row=0, column=1, sticky="ew", pady=(8, 0), padx=(0, 8))
 
         self._song_title_label = EllipsisLabel(
-            info, text="No track loaded", font=Styles.SUBTITLE_FONT,
+            info, text="Sin pista cargada", font=Styles.SUBTITLE_FONT,
             text_color=Styles.TEXT_COLOR)
         self._song_title_label.pack(fill="x")
 
@@ -355,12 +352,13 @@ class MainWindow(ctk.CTk):
         if self._eq_panel.winfo_ismapped():
             self._eq_panel.grid_remove()
             self._eq_toggle_btn.configure(fg_color=Styles.BUTTON_COLOR,
-                                          hover_color=Styles.BUTTON_HOVER)
+                                          hover_color=Styles.BUTTON_HOVER,
+                                          text_color=Styles.TEXT_COLOR)
         else:
             self._eq_panel.grid()
             self._eq_toggle_btn.configure(fg_color=Styles.ACCENT_COLOR,
                                           hover_color=Styles.ACCENT_HOVER,
-                                          text_color="#ffffff")
+                                          text_color=Styles.readable_on(Styles.ACCENT_COLOR))
 
     def _on_eq_change(self, state: Dict) -> None:
         """Cambios del panel EQ -> configuración + reprocesar pista."""
@@ -412,18 +410,18 @@ class MainWindow(ctk.CTk):
         logger.info("Configuración de audio aplicada: %s", settings)
 
     def _update_backend_indicator(self) -> None:
-        """Muestra el backend activo en la barra de estado."""
+        """Muestra el backend activo en la barra de estado (sin reescrituras
+        redundantes del mismo texto en cada refresco de estado)."""
         try:
             if self._audio_player.is_hq():
-                self._backend_label.configure(text="● HQ Engine")
+                text = "● HQ Engine"
             else:
                 backend = self._audio_player.get_backend()
                 if backend == "dsp":
                     text = "● HQ…"
-                elif backend == "stream":
-                    text = ""
                 else:
                     text = ""
+            if self._backend_label.cget("text") != text:
                 self._backend_label.configure(text=text)
         except Exception:
             pass
@@ -450,10 +448,24 @@ class MainWindow(ctk.CTk):
         logger.info("Tema cambiado a: %s", theme_key)
 
     def _rebuild_ui(self) -> None:
-        was_playing = self._audio_player.get_state() == PlayerState.PLAYING
+        """Reconstruye la UI (cambio de tema) sin perder el estado visual:
+        EQ abierto/cerrado, modo compacto, reproducción."""
+        eq_open = False
+        try:
+            eq_open = self._eq_panel.winfo_ismapped()
+        except Exception:
+            pass
 
         self._build_ui()
         self._setup_callbacks()
+
+        # Restaurar el panel EQ si estaba abierto (antes se cerraba solo
+        # al cambiar de tema, "saltando" el layout)
+        if eq_open:
+            self._eq_panel.grid()
+            self._eq_toggle_btn.configure(fg_color=Styles.ACCENT_COLOR,
+                                          hover_color=Styles.ACCENT_HOVER,
+                                          text_color=Styles.readable_on(Styles.ACCENT_COLOR))
 
         self._player_controls.set_volume(self._audio_player.get_volume())
         self._player_controls.set_shuffle_state(self._is_shuffle)
@@ -467,8 +479,10 @@ class MainWindow(ctk.CTk):
         self._update_ui_state()
         self._update_backend_indicator()
 
-        if was_playing:
-            self._visualizer.set_playing(True)
+        # Re-aplicar modo compacto: tras rebuild los botones vuelven al
+        # texto largo y se ensanchan aunque la ventana siga siendo pequeña
+        if self._compact:
+            self.after_idle(self._apply_compact)
 
     # ------------------------------------------------------------------
     # Carga de archivos y playlist
@@ -591,7 +605,7 @@ class MainWindow(ctk.CTk):
         if track:
             self._update_track_info(track)
         else:
-            self._song_title_label.set_full_text("No track loaded")
+            self._song_title_label.set_full_text("Sin pista cargada")
             self._artist_label.set_full_text("-")
             self._album_art.set_art(None, "♪")
             self._meta_chips.set_metadata({})
@@ -708,6 +722,19 @@ class MainWindow(ctk.CTk):
         self._is_seeking = True
 
     def _on_progress_release(self, event=None) -> None:
+        """Finaliza el seek al soltar sobre el propio slider."""
+        self._finalize_seek()
+
+    def _on_any_release(self, event=None) -> None:
+        """Finaliza un seek pendiente aunque el ratón se suelte fuera del
+        slider (si no, _is_seeking quedaba bloqueado en True y la barra de
+        progreso dejaba de actualizarse hasta recargar la pista)."""
+        self._finalize_seek()
+
+    def _finalize_seek(self) -> None:
+        """Aplica la posición del slider al soltar el arrastre (idempotente)."""
+        if not self._is_seeking:
+            return
         self._is_seeking = False
         if self._total_duration > 0:
             position = (self._progress_slider.get() / 100.0) * self._total_duration
@@ -732,15 +759,31 @@ class MainWindow(ctk.CTk):
         if self._total_duration > 0:
             progress = (self._current_position / self._total_duration) * 100
             self._progress_slider.set(progress)
-            self._time_label.configure(text=self._format_time(self._current_position))
-            self._total_time_label.configure(text=f"/ {self._format_time(self._total_duration)}")
+            self._set_text_if_changed(self._time_label,
+                                      self._format_time(self._current_position))
+            self._set_text_if_changed(self._total_time_label,
+                                      f"/ {self._format_time(self._total_duration)}")
             # Cabezal de la forma de onda (si hay análisis HQ)
             if self._analysis:
                 self._waveform.set_playhead(self._current_position / self._total_duration)
         else:
             self._progress_slider.set(0)
-            self._time_label.configure(text="00:00")
-            self._total_time_label.configure(text="/ 00:00")
+            self._set_text_if_changed(self._time_label, "00:00")
+            self._set_text_if_changed(self._total_time_label, "/ 00:00")
+
+    @staticmethod
+    def _set_text_if_changed(label: ctk.CTkLabel, text: str) -> None:
+        """Escribe el texto de un label SOLO si cambió.
+
+        La posición se actualiza varias veces por segundo mientras suena;
+        reconfigurar el mismo texto en cada tick fuerza redibujos inútiles
+        que pueden provocar parpadeos.
+        """
+        try:
+            if label.cget("text") != text:
+                label.configure(text=text)
+        except tk.TclError:
+            pass
 
     # ------------------------------------------------------------------
     # Cola hilo de audio -> UI
@@ -849,7 +892,14 @@ class MainWindow(ctk.CTk):
 
         self._player_controls.set_playing_state(is_playing)
         self._playlist_view.set_playing_state(is_playing)
-        self._visualizer.set_playing(is_playing)
+        # Solo animar el ecualizador de barras si es el widget VISIBLE
+        # (en modo HQ se muestra la forma de onda y el visualizador está
+        # oculto; animarlo oculto quemaría CPU sin verse nada).
+        try:
+            if self._visualizer.winfo_ismapped():
+                self._visualizer.set_playing(is_playing)
+        except tk.TclError:
+            pass
 
         has_track = self._playlist_manager.get_current_track() is not None
         self._player_controls.set_enabled(has_track)
@@ -867,14 +917,22 @@ class MainWindow(ctk.CTk):
         else:
             color, text = Styles.TEXT_SECONDARY, "Detenido"
 
-        self._state_dot.configure(text_color=color)
-        self._state_label.configure(text=text)
-
         tracks = self._playlist_manager.get_all_tracks()
         total = sum((t.duration or 0) for t in tracks)
-        self._track_count_label.configure(
-            text=f"{len(tracks)} pista{'s' if len(tracks) != 1 else ''}")
-        self._total_duration_label.configure(text=f"Total {self._format_time(total)}")
+        count_text = f"{len(tracks)} pista{'s' if len(tracks) != 1 else ''}"
+        total_text = f"Total {self._format_time(total)}"
+
+        try:
+            if self._state_dot.cget("text_color") != color:
+                self._state_dot.configure(text_color=color)
+            if self._state_label.cget("text") != text:
+                self._state_label.configure(text=text)
+            if self._track_count_label.cget("text") != count_text:
+                self._track_count_label.configure(text=count_text)
+            if self._total_duration_label.cget("text") != total_text:
+                self._total_duration_label.configure(text=total_text)
+        except tk.TclError:
+            pass
 
     @staticmethod
     def _format_time(seconds: float) -> str:
@@ -889,9 +947,15 @@ class MainWindow(ctk.CTk):
     def _on_window_resize(self, event) -> None:
         if event.widget is not self:
             return
-        compact = event.width < COMPACT_WIDTH
-        if compact != self._compact:
-            self._compact = compact
+        # Histéresis: al redimensionar justo en el umbral, Tk puede emitir
+        # varios <Configure> con ±1 px; sin margen los botones alternarían
+        # texto (largo/corto) continuamente ("controles que parpadean").
+        if self._compact:
+            should_compact = event.width < COMPACT_WIDTH + 16
+        else:
+            should_compact = event.width < COMPACT_WIDTH - 16
+        if should_compact != self._compact:
+            self._compact = should_compact
             self.after_idle(self._apply_compact)
 
     def _apply_compact(self) -> None:
@@ -900,6 +964,27 @@ class MainWindow(ctk.CTk):
                 btn.configure(text=compact_text if self._compact else normal_text)
             except Exception:
                 pass
+
+    def _on_window_map(self, event) -> None:
+        """Al restaurar la ventana, resincroniza el estado visual
+        (reanuda el ecualizador si sigue sonando)."""
+        if event.widget is not self:
+            return
+        try:
+            self._update_ui_state()
+        except tk.TclError:
+            pass
+
+    def _on_window_unmap(self, event) -> None:
+        """Al minimizar la ventana, detiene la animación del ecualizador
+        (Tk desmapea los widgets y el canvas no se ve: no hay que gastar
+        CPU redibujando barras invisibles)."""
+        if event.widget is not self:
+            return
+        try:
+            self._visualizer.set_playing(False)
+        except tk.TclError:
+            pass
 
     # ------------------------------------------------------------------
     # Atajos de teclado
@@ -929,6 +1014,8 @@ class MainWindow(ctk.CTk):
         self.bind("<q>", self._guard_shortcut(self._on_close))
         self.bind("<f>", self._guard_shortcut(self._toggle_fullscreen))
         self.bind("<Escape>", lambda e: self._exit_fullscreen())
+        # Liberar el "seeking" aunque el botón se suelte fuera del slider
+        self.bind("<ButtonRelease-1>", self._on_any_release, add="+")
         logger.info("Atajos de teclado configurados")
 
     def _cycle_theme(self) -> None:
@@ -1015,10 +1102,6 @@ class MainWindow(ctk.CTk):
     # ------------------------------------------------------------------
 
     def cleanup(self) -> None:
-        try:
-            self._player_controls.stop_animations()
-        except Exception:
-            pass
         self._audio_player.cleanup()
 
     def run(self) -> None:
