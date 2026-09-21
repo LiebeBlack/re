@@ -1,223 +1,96 @@
-# Musik Player
+# Hidra
 
-Reproductor de música offline de escritorio con interfaz gráfica **ultra moderna**.
+Reproductor de audio para Windows 10/11 construido directamente sobre WASAPI, Media Foundation y WinUI 3, sin middleware de audio ni dependencias de códecs externas.
 
-## Características
+## El proyecto en una frase
 
-- **Interfaz ultra moderna**: Estilo neón/glass con CustomTkinter y **8 temas** (7 oscuros + 1 claro) con cambio en vivo desde el header (o con la tecla `T`)
-- **Dinamismo**: Ecualizador animado en la pista en reproducción, forma de onda con cabezal en vivo y botón de play circular destacado con el acento del tema — los controles nunca se mueven, se escalan ni se animan solos (solo hover por color)
-- **Reproducción offline**: Sin necesidad de conexión a internet
-- **Soporte para múltiples formatos**: MP3, WAV, OGG, FLAC
-- **Controles completos**: Play/Pause, Siguiente, Anterior, Volumen (con porcentaje en vivo), Barra de progreso
-- **Gestión de playlist**: Agregar, remover, buscar y organizar pistas
-- **Modos de reproducción**: Shuffle y Repeat (Off, All, One)
-- **Persistencia**: Guarda automáticamente tu playlist, tema, volumen y configuración
-- **Extracción de metadatos**: Información de artista, álbum, título, etc.
-- **Atajos de teclado**: Control total desde el teclado
-- **Búsqueda en playlist**: Filtra rápidamente tus canciones
-- **Responsividad**: El layout se adapta a la ventana (modo compacto automático, títulos con elipsis, playlist expandible)
-- **Extras**: Tooltips en todos los controles, tarjeta "Now Playing" con portada e inicial, barra de estado con estado/duración total
-- **Diseño ligero y optimizado**: Rendimiento eficiente
+Una cadena de señal completa —decodificación, remuestreo, mezcla y salida— cuyo hilo de tiempo real no reserva memoria, entregada como aplicación de escritorio de despliegue estándar: un ejecutable, sus bibliotecas y las dependencias del sistema.
 
-## Requisitos del Sistema
-
-- Python 3.10 o superior
-- Windows 10/11, macOS, o Linux
-- 4GB RAM mínimo
-- 100MB espacio en disco
-
-## Instalación
-
-1. Clonar o descargar el repositorio:
-```bash
-git clone https://github.com/tu-usuario/musik-player.git
-cd musik-player
-```
-
-2. Crear un entorno virtual (recomendado):
-```bash
-python -m venv venv
-
-# En Windows:
-venv\Scripts\activate
-
-# En macOS/Linux:
-source venv/bin/activate
-```
-
-3. Instalar las dependencias:
-```bash
-pip install -r requirements.txt
-```
-
-## Uso
-
-Ejecutar el reproductor:
-```bash
-python src/main.py
-```
-
-### Controles
-
-#### Botones de la Interfaz
-- **Play/Pause (▶/⏸)**: Reproducir o pausar la canción actual
-- **Siguiente (▶▶)**: Saltar a la siguiente canción en la playlist
-- **Anterior (◀◀)**: Volver a la canción anterior
-- **Shuffle (🔀)**: Activar/desactivar reproducción aleatoria
-- **Repeat (🔁/🔂)**: Ciclar entre Off, Repeat All, Repeat One
-- **Barra de Volumen**: Ajustar el volumen de reproducción
-- **Barra de Progreso**: Navegar dentro de la canción actual
-- **Cargar Archivos**: Agregar archivos de audio a la playlist
-- **Búsqueda**: Filtrar canciones por título o artista
-
-#### Atajos de Teclado
-- **Espacio**: Play/Pause
-- **Flecha Izquierda**: Canción anterior
-- **Ctrl + Flecha Izquierda**: Retroceder 10 segundos
-- **Flecha Derecha**: Siguiente canción
-- **Ctrl + Flecha Derecha**: Avanzar 10 segundos
-- **Flecha Arriba**: Subir volumen 10%
-- **Flecha Abajo**: Bajar volumen 10%
-- **M**: Mute/Unmute
-- **S**: Toggle Shuffle
-- **R**: Toggle Repeat
-- **L**: Cargar archivos
-- **T**: Ciclar entre temas
-- **F**: Pantalla completa
-- **Escape**: Salir de pantalla completa
-- **Q**: Cerrar aplicación
-
-## Formatos Soportados
-
-- MP3 (MPEG Audio Layer III)
-- WAV (Waveform Audio File Format)
-- OGG (Ogg Vorbis)
-- FLAC (Free Lossless Audio Codec)
-
-## Estructura del Proyecto
+## Arquitectura
 
 ```
-musik-player/
-├── src/
-│   ├── main.py                   # Punto de entrada principal
-│   ├── ui/                       # Módulos de interfaz gráfica
-│   │   ├── main_window.py        # Ventana principal (layout, temas, estado)
-│   │   ├── player_controls.py    # Controles de reproducción
-│   │   ├── playlist_view.py      # Vista de playlist
-│   │   ├── audio_panel.py        # Chips de metadatos, EQ y configuración
-│   │   ├── styles.py             # Temas, colores y helpers de color
-│   │   └── widgets.py            # Widgets reutilizables (tooltip, visualizador, onda)
-│   ├── audio/                    # Módulos de audio
-│   │   ├── player.py             # Motor de reproducción
-│   │   └── playlist_manager.py   # Gestión de playlist
-│   └── utils/                    # Utilidades
-│       ├── config_manager.py     # Gestión de configuración
-│       ├── file_handler.py       # Manejo de archivos
-│       └── metadata_extractor.py # Extracción de metadatos
-├── .github/
-│   └── workflows/
-│       └── build.yml             # GitHub Actions CI/CD
-├── requirements.txt              # Dependencias
-├── build.py                      # Script de compilación
-├── README.md                     # Este archivo
-├── GUIA_DEL_PROYECTO.md          # Documentación técnica
-└── MEJORAS_REALIZADAS.md        # Registro de mejoras
+┌────────────────────────────────────────────────────────────────────┐
+│  [04] Hidra.Shell        Interfaz WinUI 3                          │
+│       Ventana sin empaquetar, espectro en Canvas, barra de        │
+│       búsqueda, transporte y diagnóstico en vivo. Atajos:         │
+│       espacio, flechas. No toca audio: pinta contadores.          │
+├────────────────────────────────────────────────────────────────────┤
+│  [03] Hidra.Audio        Motores de hardware                       │
+│       WasapiExclusiveOutput  → negociación y render por evento     │
+│       MediaFoundationDecoder → FLAC/MP3/AAC/WAV/WMA sin NuGet      │
+│       PlaybackPipeline       → hilo decodificador + cola + DSP     │
+├────────────────────────────────────────────────────────────────────┤
+│  [02] Hidra.Kernel       Núcleo sin asignaciones                   │
+│       DSP SIMD (FFT radix-2, sinc-Kaiser, ventanas, bandas)        │
+│       memoria alineada a 64 B, cola SPSC sin bloqueo               │
+│       interop kernel32 + MMCSS (Avrt) vía LibraryImport            │
+├────────────────────────────────────────────────────────────────────┤
+│  [03] Hidra.Interop      CsWin32                                   │
+│       Superficie Win32/WASAPI/MF generada desde metadatos          │
+│       oficiales de Windows, no transcrita a mano.                  │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
-## Compilación
+El hilo de audio solo vacía una cola ya llena. La decodificación ocurre en un hilo aparte y se comunica con el de audio por una cola de un productor y un consumidor sin candados; si el decodificador se retrasa, el hilo de audio rellena con silencio y lo contabiliza en lugar de esperar. El análisis de espectro vive en el temporizador de la interfaz, nunca dentro del callback del dispositivo.
 
-Para crear un ejecutable:
+## Despliegue estándar, no autocontenido
 
-### Windows:
-```bash
-python build.py
+El ejecutable se publica apoyado en el runtime de .NET ya instalado en el equipo:
+
+```
+dotnet publish src/Hidra.Shell/Hidra.Shell.csproj -c Release -o artifacts/publish
 ```
 
-### Manual con PyInstaller:
-```bash
-pip install pyinstaller
-pyinstaller --name=MusikPlayer --windowed --onedir --add-data="src;src" --hidden-import=customtkinter --hidden-import=pygame --hidden-import=mutagen --clean src/main.py
+El resultado es un `Hidra.Shell.exe` acompañado de `Hidra.Kernel.dll`, `Hidra.Audio.dll`, `Hidra.Interop.dll`, el marcado compilado (`.xbf`), el índice de recursos (`.pri`) y las dependencias externas (`Microsoft.Windows.SDK.NET.dll`, `WinRT.Runtime.dll`). No hay copia del runtime incrustada ni empaquetado MSIX.
+
+Dos particularidades que el pipeline cubre de forma explícita:
+
+- El publicador de aplicaciones sin empaquetar omite `.xbf` y `.pri`; el proyecto los copia en un destino posterior a `Publish`, y la CI verifica su presencia porque sin ellos el ejecutable no arranca y no avisa del motivo.
+- No hace falta el conjunto de herramientas de C++ de Visual Studio, que era el único paso del proceso que lo exigía.
+
+Requisito de ejecución: **Windows 10 1809** o superior con el runtime de .NET 10 y el runtime de Windows App SDK instalados.
+
+## Verificación
+
+```
+dotnet build Hidra.slnx -c Release
+dotnet run --project tests/Hidra.Verify -c Release
 ```
 
-El ejecutable se generará en la carpeta `dist/MusikPlayer/`.
+El arnés ejecuta **280 comprobaciones deterministas**, entre ellas:
 
-### Instalador de Windows (NSIS):
-```bash
-python build.py
-makensis installer.nsi
+- FFT contrastada contra una DFT directa, y **paridad bit a bit** entre el camino vectorial SIMD y el escalar.
+- Paridad de canal completo de extremo a extremo: tonos a 44,1 k y 48 k remuestreados en ambas direcciones y mezclados de mono a estéreo, verificando pico exacto y frecuencia dominante.
+- Cola SPSC sin bloqueo estresada con dos hilos reales cruzando el final del arreglo.
+- Conversión de muestras incluyendo el caso en que `(float)int.MaxValue` desborda a `int.MinValue`, que era una inversión de escala audible.
+- Guardas de cero asignaciones en las rutas de tiempo real.
+- Búsqueda de extremo a extremo en tres escenarios: con el archivo detenido (sin arrancar la reproducción), al centro mientras suena y hacia atrás; en cada caso se verifica que la posición quede reflejada, que la salida no sea silencio y que el tono dominante se conserve tras el salto.
+
+Las dos sondas que tocan hardware real (abrir el dispositivo de audio y emitir sonido) son manuales a propósito:
+
+```
+dotnet run --project tests/Hidra.Verify -c Release -- --probe-audio
 ```
 
-Esto genera `MusikPlayer-Setup.exe` con el instalador que incluye accesos directos, asociaciones de archivos (MP3, WAV, OGG, FLAC) y entrada en Agregar/Quitar programas.
+## CI
 
-## Desarrollo
+`.github/workflows/build.yml` ejecuta en cada *push*, sobre `windows-2022`: restauración, compilación con advertencias como errores, arnés completo, publicación estándar, una comprobación de completitud de la publicación (los diez archivos sin los que la aplicación arranca mal o no arranca) y subida del artefacto.
 
-Para más detalles sobre la arquitectura y plan de implementación, consulte el documento [GUIA_DEL_PROYECTO.md](GUIA_DEL_PROYECTO.md).
+## Decisiones de diseño que no son obvias
 
-## Configuración
+- **El fin de flujo llega cuando se agota la cola, no el archivo.** La decodificación es mucho más rápida que el tiempo real: declarar el final al agotarse el lector dejaría medio bloque de audio por sonar y un estado "terminado" prematuro.
+- **Buscar pausa el render, no el bombeo.** Son dos interruptores distintos: mientras la búsqueda vacía y rellena la cola, el dispositivo emite silencio sin tocar la cola (así no hace falta ningún candado), y el bombeo solo se reanuda con el material nuevo ya delante del consumidor.
 
-La aplicación guarda automáticamente:
-- Posición y tamaño de la ventana
-- Volumen actual
-- Estado de Shuffle y Repeat
-- Playlist actual
-- Tema seleccionado
+- **`GetMixFormat` no es el formato del hardware.** Devuelve el formato del mezclador del sistema. La negociación conserva frecuencia y canales del dispositivo y sondea las codificaciones que el endpoint acepta de verdad; en las máquinas de desarrollo encontró 24 bits enteros donde el mezclador declaraba flotante.
+- **El rechazo de `AUDCLNT_STREAMOPTIONS_RAW` llega en `Initialize`.** No al solicitarlo. La estrategia reintenta sin RAW antes de rendirse.
+- **`AUDCLNT_E_BUFFER_SIZE_NOT_ALIGNED`** se maneja re-consultando el período alineado y reinicializando el cliente, como exige la documentación de modo exclusivo.
+- **Las interfaces de servicio de WASAPI se obtienen con `GetService`**, no con `QueryInterface`; las *derivadas* (`IAudioClient2`), al contrario. La misma idea funciona en un sitio y falla en otro.
+- **La ganancia se aplica con rampa** a lo largo del bloque: un cambio instantáneo de volumen es un escalón en la forma de onda, que se oye como un chasquido.
+- **El escalado entero va en doble precisión**, porque en simple `(float)int.MaxValue` es 2 147 483 648 y la muestra más fuerte posible se convierte en la más débil.
+- **Si el modo exclusivo no está disponible se degrada a compartido**, porque un reproductor que falla entero por no poder tomar el dispositivo es peor que uno que suena.
 
-Los archivos de configuración se guardan en el directorio de la aplicación:
-- `musik_config.json` - Configuración general
-- `musik_playlist.json` - Playlist guardada
-- `musik.log` - Log de la aplicación
+## Estado
 
-## Troubleshooting
-
-### Error: ModuleNotFoundError
-
-Asegúrese de haber instalado todas las dependencias:
-```bash
-pip install -r requirements.txt
-```
-
-### Error: No se puede reproducir el archivo
-
-Verifique que el formato del archivo sea soportado (MP3, WAV, OGG, FLAC).
-
-### El audio no se escucha
-
-- Verifique que el volumen no esté en 0
-- Asegúrese de que ningún otro programa esté usando el dispositivo de audio
-- Verifique la configuración de audio de su sistema
-
-### La playlist no se guarda
-
-- Verifique que tenga permisos de escritura en el directorio
-- Revisar el archivo `musik.log` para más detalles
-
-## Características Futuras
-
-- [ ] Visualizador de audio (waveform)
-- [ ] Ecualizador
-- [ ] Soporte de listas de reproducción múltiples
-- [ ] Integración con Spotify/Apple Music
-- [ ] Sincronización en la nube
-- [ ] Soporte de letras
-- [ ] Descarga de metadatos de internet
-
-## Contribución
-
-Las contribuciones son bienvenidas! Por favor:
-1. Fork el proyecto
-2. Crea una rama para tu feature (`git checkout -b feature/AmazingFeature`)
-3. Commit tus cambios (`git commit -m 'Add some AmazingFeature'`)
-4. Push a la rama (`git push origin feature/AmazingFeature`)
-5. Abre un Pull Request
-
-## Licencia
-
-MIT License
-
-## Autor
-
-Desarrollado con Devin AI Assistant
-
-## Versión
-
-Versión 1.0.0 - Release inicial
+- Compilación con `TreatWarningsAsErrors` + analizadores de AOT/recorte activos como disciplina: **0 advertencias, 0 errores**.
+- Cadena de reproducción validada contra hardware real: 24 576 fotogramas en 50 *callbacks* sin una sola espera agotada.
+- MMCSS se trata como mejora, no como requisito: si el servicio no está disponible, el hilo cae a prioridad elevada normal y la reproducción sigue.

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Hidra.Verify</RootNamespace>
+    <AssemblyName>Hidra.Verify</AssemblyName>
+    <!--
+      El arnes de verificacion no se publica como AOT: su unico trabajo es correr en el
+      bucle interno y en CI con `dotnet run`. Se mantiene igualmente libre de reflexion
+      para que IsAotCompatible siga siendo una garantia, no una excepcion.
+    -->
+    <PublishAot>false</PublishAot>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../../src/Hidra.Kernel/Hidra.Kernel.csproj" />
+    <ProjectReference Include="../../src/Hidra.Audio/Hidra.Audio.csproj" />
+  </ItemGroup>
+
+</Project>

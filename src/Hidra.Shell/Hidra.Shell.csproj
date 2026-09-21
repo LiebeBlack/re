@@ -1,0 +1,83 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>Hidra.Shell</RootNamespace>
+    <AssemblyName>Hidra.Shell</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <!--
+      Windows App SDK exige una version de plataforma de destino mas alta que el suelo de
+      ejecucion: el minimo soportado sigue siendo Windows 10 1809, pero las proyecciones se
+      compilan contra 19041.
+    -->
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+
+    <UseWinUI>true</UseWinUI>
+
+    <!--
+      Aplicacion SIN empaquetar y SIN autocontencion, que es lo que se pidio: se publica un
+      ejecutable mas sus bibliotecas administradas y la aplicacion se apoya en el runtime de
+      Windows App SDK instalado en el equipo, en lugar de incrustarlo.
+      WindowsPackageType=None permite ejecutarla como un binario normal, sin paquete MSIX.
+    -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>false</WindowsAppSDKSelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <!--
+    Los analizadores de recorte y de AOT se desactivan AQUI, y solo aqui. No es una excepcion
+    por comodidad: las proyecciones de CsWinRT que genera Windows App SDK resuelven tipos por
+    metadatos en tiempo de ejecucion y el analizador no puede verificarlas, de modo que
+    activarlas convierte en errores advertencias sobre codigo que no escribimos. Como el
+    despliegue no recorta nada, no hay riesgo real que cubrir. En el resto de ensamblados, que
+    si son codigo nuestro, se mantienen activadas y como errores.
+  -->
+  <PropertyGroup>
+    <IsAotCompatible>false</IsAotCompatible>
+    <IsTrimmable>false</IsTrimmable>
+    <EnableAotAnalyzer>false</EnableAotAnalyzer>
+    <EnableTrimAnalyzer>false</EnableTrimAnalyzer>
+    <EnableSingleFileAnalyzer>false</EnableSingleFileAnalyzer>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Hidra.Kernel/Hidra.Kernel.csproj" />
+    <ProjectReference Include="../Hidra.Audio/Hidra.Audio.csproj" />
+  </ItemGroup>
+
+  <!--
+    El marcado compilado y el indice de recursos tienen que viajar con el ejecutable.
+
+    El compilador de marcado SI los produce y los declara como salida de empaquetado, pero en
+    una aplicacion sin empaquetar el publicador no los copia a la carpeta de publicacion: la
+    carpeta de compilacion sale completa y la de publicacion sale sin App.xbf, MainWindow.xbf
+    ni Hidra.Shell.pri. El sintoma es de los peores, porque el publicador no avisa y el
+    ejecutable resultante no arranca sin decir por que: falla al resolver el marcado y el
+    proceso muere antes de poder mostrar nada.
+
+    Se copian aqui de forma explicita. El comodin se evalua al ejecutar el destino, no al
+    evaluar el proyecto, que es lo que permite recoger los .xbf ya generados por la fase de
+    compilacion de marcado.
+  -->
+  <Target Name="CopyMarkupResourcesToPublish" AfterTargets="Publish" Condition="'$(PublishDir)' != ''">
+    <ItemGroup>
+      <_MarkupResource Include="$(TargetDir)*.xbf" />
+      <_MarkupResource Include="$(TargetDir)$(AssemblyName).pri" />
+    </ItemGroup>
+
+    <Copy
+      SourceFiles="@(_MarkupResource)"
+      DestinationFolder="$(PublishDir)"
+      SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

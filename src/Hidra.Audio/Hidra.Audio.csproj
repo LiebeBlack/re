@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Hidra.Audio</RootNamespace>
+    <AssemblyName>Hidra.Audio</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Hidra.Kernel/Hidra.Kernel.csproj" />
+    <ProjectReference Include="../Hidra.Interop/Hidra.Interop.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Hidra.Shell" />
+    <InternalsVisibleTo Include="Hidra.Verify" />
+  </ItemGroup>
+
+</Project>

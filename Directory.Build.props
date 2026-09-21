@@ -1,0 +1,81 @@
+<Project>
+
+  <!--
+    Windows 10 1809 (build 17763) es el suelo real de .NET 10: Windows 7 no aparece
+    en la matriz oficial de sistemas soportados, y las pilas de interfaz modernas
+    exigen 1809 o superior.
+  -->
+  <PropertyGroup Label="Plataforma">
+    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <Deterministic>true</Deterministic>
+    <NeutralLanguage>es</NeutralLanguage>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <!--
+    Despliegue ESTANDAR, no autocontenido. Se publica un ejecutable anfitrion mas las
+    bibliotecas administradas del proyecto, y la aplicacion se apoya en el runtime de .NET
+    instalado en el equipo en lugar de incrustar una copia del runtime en cada binario.
+
+    Esto es incompatible con Native AOT, y por eso se desactiva: la compilacion anticipada
+    nativa produce por definicion un unico ejecutable nativo sin bibliotecas administradas.
+    Como efecto colateral deseable desaparece la necesidad del enlazador de MSVC, que era el
+    unico paso del proceso que exigia Visual Studio.
+  -->
+  <PropertyGroup Label="Despliegue">
+    <PublishAot>false</PublishAot>
+    <PublishSingleFile>false</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <SelfContained Condition="'$(RuntimeIdentifier)' != ''">false</SelfContained>
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+  </PropertyGroup>
+
+  <!--
+    Tiempo de ejecucion. Ya no hay motivo para recortar subsistemas: el objetivo de tamano
+    desaparece con el despliegue estandar, asi que se recupera todo lo que aportaba
+    funcionalidad real.
+  -->
+  <PropertyGroup Label="Tiempo de ejecucion">
+    <!-- La interfaz necesita el formato de numeros, fechas y textos de la cultura del usuario. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <UseSystemResourceKeys>false</UseSystemResourceKeys>
+    <DebuggerSupport>true</DebuggerSupport>
+    <StackTraceSupport>true</StackTraceSupport>
+
+    <!--
+      Nada de recoleccion en servidor: es una aplicacion de escritorio, no un servicio.
+      La recoleccion en segundo plano se mantiene ACTIVADA, al contrario que en la version AOT:
+      con interfaz grafica, una recoleccion bloqueante completa produce tirones visibles. El
+      hilo de audio no depende de eso para su latencia porque no reserva memoria en absoluto,
+      y esa propiedad es la que verifica el arnes de forma automatica.
+    -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+  </PropertyGroup>
+
+  <!--
+    Analizadores como errores. Se mantienen activados los de AOT y recorte AUNQUE EL DESPLIEGUE
+    YA NO SEA AOT: no se usan como requisito de despliegue sino como disciplina de codigo.
+    Prohiben la reflexion dinamica y la generacion de codigo en tiempo de ejecucion, que es
+    justo lo que hace que el arranque sea inmediato y que no haya sorpresas en tiempo de
+    ejecucion por un tipo que el compilador no pudo ver. Es una garantia barata de mantener.
+  -->
+  <PropertyGroup Label="Analizadores">
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+    <EnableSingleFileAnalyzer>true</EnableSingleFileAnalyzer>
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+  </PropertyGroup>
+
+</Project>

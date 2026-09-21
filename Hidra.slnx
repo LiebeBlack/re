@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Hidra.Interop/Hidra.Interop.csproj" />
+    <Project Path="src/Hidra.Kernel/Hidra.Kernel.csproj" />
+    <Project Path="src/Hidra.Audio/Hidra.Audio.csproj" />
+    <Project Path="src/Hidra.Shell/Hidra.Shell.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Hidra.Verify/Hidra.Verify.csproj" />
+  </Folder>
+</Solution>

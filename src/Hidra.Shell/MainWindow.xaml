@@ -1,0 +1,314 @@
+<Window
+    x:Class="Hidra.Shell.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        La raiz acepta arrastrar y soltar. Es la via rapida para abrir un archivo y no cuesta
+        nada: solo se declaran los dos controladores en el contenedor de mas arriba.
+    -->
+    <Grid
+        x:Name="RootGrid"
+        Background="{StaticResource HidraPage}"
+        AllowDrop="True"
+        DragOver="OnRootDragOver"
+        Drop="OnRootDrop"
+        KeyDown="OnRootKeyDown">
+
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!--
+            Barra de titulo propia. El contenido se extiende hasta el borde superior y la region
+            arrastrable la define el sistema a partir del elemento que se le indique. El lado
+            derecho queda libre a proposito: ahi dibuja el sistema los botones de la ventana.
+        -->
+        <Grid
+            x:Name="TitleBar"
+            Grid.Row="0"
+            Height="48"
+            Padding="20,0,0,0"
+            Background="Transparent">
+
+            <StackPanel
+                Orientation="Horizontal"
+                Spacing="10"
+                VerticalAlignment="Center">
+
+                <Border
+                    Width="22"
+                    Height="22"
+                    CornerRadius="6"
+                    Background="{StaticResource HidraAccent}" />
+
+                <TextBlock
+                    Text="Hidra"
+                    FontSize="14"
+                    FontWeight="SemiBold"
+                    Foreground="{StaticResource HidraText}"
+                    VerticalAlignment="Center" />
+
+                <TextBlock
+                    Text="motor de audio por evento"
+                    FontSize="12"
+                    Foreground="{StaticResource HidraTextMuted}"
+                    VerticalAlignment="Center" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Cabecera: que se esta reproduciendo y que formato tiene. -->
+        <Border
+            Grid.Row="1"
+            Margin="20,4,20,0"
+            Padding="20,18"
+            CornerRadius="14"
+            Background="{StaticResource HidraSurface}"
+            BorderThickness="1"
+            BorderBrush="{StaticResource HidraBorder}">
+
+            <Grid ColumnSpacing="20">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Spacing="6">
+                    <TextBlock
+                        x:Name="TrackTitle"
+                        Text="Sin archivo"
+                        FontSize="22"
+                        FontWeight="SemiBold"
+                        TextTrimming="CharacterEllipsis"
+                        Foreground="{StaticResource HidraText}" />
+
+                    <TextBlock
+                        x:Name="TrackDetail"
+                        Text="Arrastra un archivo aqui o usa el boton de abrir"
+                        FontSize="12"
+                        TextTrimming="CharacterEllipsis"
+                        Foreground="{StaticResource HidraTextMuted}" />
+                </StackPanel>
+
+                <Button
+                    x:Name="OpenButton"
+                    Grid.Column="1"
+                    Click="OnOpenClicked"
+                    Padding="16,10"
+                    CornerRadius="8"
+                    BorderThickness="1"
+                    BorderBrush="{StaticResource HidraBorder}"
+                    Background="{StaticResource HidraSurfaceAlt}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <FontIcon Glyph="&#xE8E5;" FontSize="14" Foreground="{StaticResource HidraAccent}" />
+                        <TextBlock Text="Abrir archivo" FontSize="13" Foreground="{StaticResource HidraText}" />
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </Border>
+
+        <!-- Analizador de espectro. -->
+        <Border
+            Grid.Row="2"
+            Margin="20,14,20,0"
+            CornerRadius="14"
+            Background="{StaticResource HidraSurface}"
+            BorderThickness="1"
+            BorderBrush="{StaticResource HidraBorder}">
+
+            <Grid x:Name="SpectrumHost" SizeChanged="OnSpectrumSizeChanged">
+                <Canvas x:Name="SpectrumCanvas" />
+
+                <TextBlock
+                    x:Name="SpectrumPlaceholder"
+                    Text="el espectro aparece durante la reproduccion"
+                    FontSize="12"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Foreground="{StaticResource HidraTextMuted}" />
+            </Grid>
+        </Border>
+
+        <!-- Transporte. -->
+        <Grid
+            Grid.Row="3"
+            Margin="20,14,20,0"
+            ColumnSpacing="20">
+
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel
+                Grid.Column="0"
+                Orientation="Horizontal"
+                Spacing="12"
+                VerticalAlignment="Center">
+
+                <Button
+                    x:Name="StopButton"
+                    Style="{StaticResource HidraTransportButton}"
+                    Click="OnStopClicked"
+                    ToolTipService.ToolTip="Detener">
+                    <FontIcon Glyph="&#xE71A;" FontSize="14" />
+                </Button>
+
+                <Button
+                    x:Name="PlayButton"
+                    Style="{StaticResource HidraPrimaryButton}"
+                    Click="OnPlayPauseClicked"
+                    ToolTipService.ToolTip="Reproducir">
+                    <FontIcon x:Name="PlayIcon" Glyph="&#xE768;" FontSize="18" />
+                </Button>
+            </StackPanel>
+
+            <!--
+                Indicador de posicion con barra de busqueda real. El maximo del control es la
+                duracion del archivo en unidades de cien nanosegundos y el valor, la posicion de
+                la cola: avanza con la reproduccion y salta al buscar. Cuando la fuente no
+                declara duracion, la barra se desactiva en lugar de fingir un total inventado.
+            -->
+            <Grid
+                Grid.Column="1"
+                ColumnSpacing="12"
+                VerticalAlignment="Center">
+
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock
+                    x:Name="PositionText"
+                    Grid.Column="0"
+                    Text="00:00"
+                    FontSize="13"
+                    FontFamily="Consolas"
+                    MinWidth="44"
+                    VerticalAlignment="Center"
+                    Foreground="{StaticResource HidraText}" />
+
+                <Slider
+                    x:Name="SeekSlider"
+                    Grid.Column="1"
+                    Minimum="0"
+                    Maximum="1"
+                    Value="0"
+                    IsThumbToolTipEnabled="False"
+                    HorizontalAlignment="Stretch"
+                    VerticalAlignment="Center" />
+
+                <TextBlock
+                    x:Name="TotalText"
+                    Grid.Column="2"
+                    Text="--:--"
+                    FontSize="13"
+                    FontFamily="Consolas"
+                    MinWidth="44"
+                    TextAlignment="Right"
+                    VerticalAlignment="Center"
+                    Foreground="{StaticResource HidraTextMuted}" />
+
+                <TextBlock
+                    x:Name="StateText"
+                    Grid.Column="3"
+                    Text="en espera"
+                    FontSize="12"
+                    Margin="8,0,0,0"
+                    VerticalAlignment="Center"
+                    Foreground="{StaticResource HidraTextMuted}" />
+            </Grid>
+
+            <StackPanel
+                Grid.Column="2"
+                Orientation="Horizontal"
+                Spacing="10"
+                VerticalAlignment="Center">
+
+                <FontIcon Glyph="&#xE767;" FontSize="14" Foreground="{StaticResource HidraTextMuted}" />
+
+                <Slider
+                    x:Name="VolumeSlider"
+                    Width="160"
+                    Minimum="0"
+                    Maximum="100"
+                    Value="80"
+                    ValueChanged="OnVolumeChanged"
+                    StepFrequency="1" />
+
+                <TextBlock
+                    x:Name="VolumeText"
+                    Text="80 %"
+                    FontSize="12"
+                    Width="44"
+                    TextAlignment="Right"
+                    VerticalAlignment="Center"
+                    Foreground="{StaticResource HidraTextMuted}" />
+            </StackPanel>
+        </Grid>
+
+        <!--
+            Diagnostico. Todo lo que aqui se muestra es informacion que el motor ya tenia pero que
+            era invisible: en que modo se abrio el dispositivo, cuantos fotogramas concede el
+            buffer, si la solicitud de flujo sin procesar fue rechazada y cuantas muestras de
+            silencio hubo que insertar. Un reproductor que no ensena esto obliga a adivinar por
+            que suena distinto.
+        -->
+        <Border
+            Grid.Row="4"
+            Margin="20,14,20,20"
+            Padding="16,12"
+            CornerRadius="12"
+            Background="{StaticResource HidraSurfaceAlt}"
+            BorderThickness="1"
+            BorderBrush="{StaticResource HidraBorder}">
+
+            <Grid ColumnSpacing="18" RowSpacing="6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <TextBlock Grid.Row="0" Grid.Column="0" Text="DISPOSITIVO" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource HidraTextMuted}" />
+                <TextBlock x:Name="DeviceFormatText" Grid.Row="1" Grid.Column="0" Text="—" FontSize="12" FontFamily="Consolas" TextTrimming="CharacterEllipsis" Foreground="{StaticResource HidraText}" />
+
+                <TextBlock Grid.Row="0" Grid.Column="1" Text="MODO" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource HidraTextMuted}" />
+                <TextBlock x:Name="ModeText" Grid.Row="1" Grid.Column="1" Text="—" FontSize="12" FontFamily="Consolas" TextTrimming="CharacterEllipsis" Foreground="{StaticResource HidraText}" />
+
+                <TextBlock Grid.Row="0" Grid.Column="2" Text="LATENCIA" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource HidraTextMuted}" />
+                <TextBlock x:Name="LatencyText" Grid.Row="1" Grid.Column="2" Text="—" FontSize="12" FontFamily="Consolas" TextTrimming="CharacterEllipsis" Foreground="{StaticResource HidraText}" />
+
+                <TextBlock Grid.Row="0" Grid.Column="3" Text="SALUD" FontSize="10" FontWeight="SemiBold" Foreground="{StaticResource HidraTextMuted}" />
+                <TextBlock x:Name="HealthText" Grid.Row="1" Grid.Column="3" Text="—" FontSize="12" FontFamily="Consolas" TextTrimming="CharacterEllipsis" Foreground="{StaticResource HidraText}" />
+            </Grid>
+        </Border>
+
+        <!--
+            Avisos. Se superponen por encima del contenido en lugar de ocupar una fila propia:
+            abrir y cerrar una fila al aparecer un mensaje desplazaria toda la ventana, y el
+            aviso no es un elemento del que dependa el resto del diseno.
+        -->
+        <InfoBar
+            x:Name="StatusBar"
+            Grid.Row="0"
+            Grid.RowSpan="5"
+            Margin="20,0,20,20"
+            IsOpen="False"
+            IsClosable="True"
+            VerticalAlignment="Bottom" />
+    </Grid>
+</Window>

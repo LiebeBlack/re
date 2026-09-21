@@ -1,0 +1,61 @@
+<Application
+    x:Class="Hidra.Shell.App"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    RequestedTheme="Dark">
+
+    <!--
+        La paleta se declara aqui de forma explicita, con colores literales, en lugar de apoyarse
+        en los recursos del tema del sistema. Son dos motivos. El primero es que el negro puro
+        del fondo es una decision de diseno, no una preferencia del usuario, y el tema claro no
+        debe cambiarla. El segundo es operativo: una clave de recurso que no exista no falla al
+        compilar, revienta al abrir la ventana, de modo que cuantas menos claves se hereden del
+        sistema, menos superficie hay para ese fallo.
+    -->
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <Color x:Key="HidraAccentColor">#FF3DDC97</Color>
+
+            <SolidColorBrush x:Key="HidraPage" Color="#FF000000" />
+            <SolidColorBrush x:Key="HidraSurface" Color="#FF0A0E0D" />
+            <SolidColorBrush x:Key="HidraSurfaceAlt" Color="#FF121917" />
+            <SolidColorBrush x:Key="HidraBorder" Color="#FF1E2B28" />
+            <SolidColorBrush x:Key="HidraGridLine" Color="#FF16201E" />
+            <SolidColorBrush x:Key="HidraText" Color="#FFF1F6F4" />
+            <SolidColorBrush x:Key="HidraTextMuted" Color="#FF7E938E" />
+            <SolidColorBrush x:Key="HidraAccent" Color="#FF3DDC97" />
+            <SolidColorBrush x:Key="HidraWarning" Color="#FFF5A524" />
+            <SolidColorBrush x:Key="HidraCritical" Color="#FFF2506E" />
+
+            <!--
+                Estilo base de los botones de icono del transporte: circulares, sin borde visible
+                y con el acento solo al pasar por encima.
+            -->
+            <Style x:Key="HidraTransportButton" TargetType="Button">
+                <Setter Property="Width" Value="46" />
+                <Setter Property="Height" Value="46" />
+                <Setter Property="CornerRadius" Value="23" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Background" Value="{StaticResource HidraSurfaceAlt}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="BorderBrush" Value="{StaticResource HidraBorder}" />
+                <Setter Property="Foreground" Value="{StaticResource HidraText}" />
+            </Style>
+
+            <Style x:Key="HidraPrimaryButton" TargetType="Button">
+                <Setter Property="Width" Value="56" />
+                <Setter Property="Height" Value="56" />
+                <Setter Property="CornerRadius" Value="28" />
+                <Setter Property="Padding" Value="0" />
+                <Setter Property="Background" Value="{StaticResource HidraAccent}" />
+                <Setter Property="BorderThickness" Value="0" />
+                <Setter Property="Foreground" Value="#FF04120C" />
+            </Style>
+        </ResourceDictionary>
+    </Application.Resources>
+
+</Application>

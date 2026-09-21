@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Hidra.Interop</RootNamespace>
+    <AssemblyName>Hidra.Interop</AssemblyName>
+    <!--
+      Se emite el codigo generado a obj/generated para poder revisarlo: el orden de la vtable
+      y los GUID son la clase de detalle que hay que poder auditar a mano cuando algo falla en
+      tiempo de ejecucion, en lugar de tratarlos como una caja negra.
+    -->
+    <EmitCompilerGeneratedFiles>true</EmitCompilerGeneratedFiles>
+    <CompilerGeneratedFilesOutputPath>$(BaseIntermediateOutputPath)generated</CompilerGeneratedFilesOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      CsWin32 es un generador de codigo fuente que escribe las declaraciones de P/Invoke y las
+      interfaces COM a partir de los metadatos oficiales de Win32. Es la alternativa correcta a
+      transcribir a mano el orden de la vtable y los GUID de DirectX: el orden de los metodos de
+      ID3D12Device o de IMFSourceReader no se puede verificar a ojo, y equivocarse en una sola
+      ranura produce una violacion de acceso, no un error de compilacion.
+      No hay reflexion en el resultado: se emiten punteros a funcion, compatible con AOT.
+    -->
+    <PackageReference Include="Microsoft.Windows.CsWin32" Version="0.3.335" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

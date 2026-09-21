@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Hidra.Kernel</RootNamespace>
+    <AssemblyName>Hidra.Kernel</AssemblyName>
+  </PropertyGroup>
+
+  <!--
+    Las primitivas del kernel (memoria alineada, eventos del kernel, MMCSS, conversor de
+    muestras) son infraestructura compartida entre ensamblados hermanos de la misma
+    aplicacion. Se exponen por visibilidad entre ensamblados en lugar de hacerlas publicas
+    por dos razones: mantiene cerrada la superficie publica de cada ensamblado, y evita que
+    los analizadores de diseno de API publica (CA1051, CA1815 y compania) se disparen sobre
+    tipos internos que nunca van a cruzar un limite de paquete.
+  -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Hidra.Audio" />
+    <InternalsVisibleTo Include="Hidra.Shell" />
+    <InternalsVisibleTo Include="Hidra.Verify" />
+  </ItemGroup>
+
+</Project>
