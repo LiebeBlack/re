@@ -39,6 +39,7 @@ internal static class Program
         AudioTests.Run();
         FilePipelineTests.Run();
         AllocationTests.Run();
+        InteropTests.Run();
 
         return Harness.Report();
     }

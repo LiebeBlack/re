@@ -60,58 +60,63 @@ internal static partial class Kernel32
     [return: MarshalAs(UnmanagedType.Bool)]
     internal static partial bool QueryPerformanceFrequency(out long frequency);
 
-    /// <summary>Bits FTZ (bit 15) y DAZ (bit 6) del registro de control MXCSR.</summary>
-    internal const uint MxCsrFtz = 1u << 15;
-    internal const uint MxCsrDaz = 1u << 6;
+    /// <summary>Mascara de control de denormales de <c>_controlfp_s</c> (<c>_MCW_DN</c>).</summary>
+    internal const uint ControlWordDenormalMask = 0x03000000u;
+
+    /// <summary>Modo de aplanado de denormales (<c>_DN_FLUSH</c>): en x64 fija FTZ y DAZ en el MXCSR.</summary>
+    internal const uint DenormalFlush = 0x01000000u;
+
+    /// <summary>Valor centinela de fallo: <see cref="RestoreControlWord"/> lo ignora.</summary>
+    internal const uint ControlWordFailed = uint.MaxValue;
 
     /// <summary>
-    /// Activa FTZ/DAZ en el hilo actual y devuelve el MXCSR previo para restaurarlo.
+    /// Activa el aplanado de denormales (FTZ/DAZ) en el hilo actual y devuelve el modo
+    /// previo para restaurarlo.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// Los numeros denormales aparecen solos en una cadena de audio (fades de volumen,
-    /// colas del remuestreador, silencios del limitador) y cada operacion con uno cuesta
-    /// cerca de cien ciclos de microcodigo. FTZ convierte cualquier resultado denormal en
-    /// cero y DAZ trata las entradas denormales como cero, ambos en un ciclo; la perdida
-    /// numerica esta a -149 dBFS, muy por debajo de cualquier consideracion auditable.
+    /// Los denormales aparecen solos en una cadena de audio (fades de volumen, colas del
+    /// remuestreador, silencios del limitador) y cada operacion con uno cuesta cerca de
+    /// cien ciclos de microcodigo. Con el aplanado activo el hardware los convierte en
+    /// cero en un ciclo; la perdida numerica esta a -149 dBFS, muy por debajo de cualquier
+    /// consideracion auditable.
     /// </para>
     /// <para>
-    /// En x86/x64 el registro es MXCSR (instrucciones SSE stmxcsr/ldmxcsr). La llamada
-    /// esta escrita en C# directo (no LibraryImport) porque no hay funcion de sistema que
-    /// la envuelva: es una instruccion del procesador. En Arm64 el manejo de denormales
-    /// es por registro FPCR y hoy no se toca: el hardware AdvSIMD ya los flusha por
-    /// defecto en las rutas que usa el JIT.
+    /// La via es <c>_controlfp_s</c> del CRT y no un acceso directo al MXCSR: en x64,
+    /// <c>_DN_FLUSH</c> sobre <c>_MCW_DN</c> fija a la vez los bits FTZ y DAZ del registro,
+    /// y la funcion existe en msvcrt.dll y ucrtbase.dll en todas las versiones soportadas,
+    /// mientras que los simbolos <c>_stmxcsr</c>/<c>_ldmxcsr</c> NO estan exportados por
+    /// ningun CRT de Windows y enlazar a ellos revienta el hilo con
+    /// EntryPointNotFoundException. La llamada es por hilo: cada hilo de audio la aplica
+    /// en su arranque y la revierte en su salida.
     /// </para>
     /// </remarks>
-    /// <returns>El valor MXCSR anterior del hilo, para <see cref="RestoreControlWord"/>.</returns>
-    internal static unsafe uint EnableFtzDaz()
+    /// <returns>El modo de denormales previo, o <see cref="ControlWordFailed"/> si el CRT rechazo la peticion.</returns>
+    internal static uint EnableFtzDaz()
     {
-        uint current;
+        int result = _controlfp_s(out uint current, DenormalFlush, ControlWordDenormalMask);
 
-        // stmxcsr [rsp]: guarda el MXCSR del hilo en la pila.
-        __stmxcsr(&current);
+        return result == 0 ? current : ControlWordFailed;
+    }
 
-        uint modified = current | MxCsrFtz | MxCsrDaz;
-
-        // Solo se escribe si cambia: evita el coste de ldmxcsr (que serializa) cuando el
-        // hilo ya tenia los bits puestos por un componente anterior.
-        if (modified != current)
+    /// <summary>Restaura el modo de denormales devuelto por <see cref="EnableFtzDaz"/>.</summary>
+    internal static void RestoreControlWord(uint controlWord)
+    {
+        if (controlWord == ControlWordFailed)
         {
-            __ldmxcsr(modified);
+            return;
         }
 
-        return current;
+        // Solo se restaura el campo de denormales: el resto del registro de control es de
+        // quien lo haya tocado, y pisarlo entero seria un efecto secundario invisible.
+        _ = _controlfp_s(out _, controlWord & ControlWordDenormalMask, ControlWordDenormalMask);
     }
 
-    /// <summary>Restaura un MXCSR previamente devuelto por <see cref="EnableFtzDaz"/>.</summary>
-    internal static unsafe void RestoreControlWord(uint controlWord)
-    {
-        __ldmxcsr(controlWord);
-    }
-
-    [DllImport("msvcrt.dll", EntryPoint = "_stmxcsr", SetLastError = false, CallingConvention = CallingConvention.Cdecl)]
-    private static extern unsafe void __stmxcsr(uint* controlWord);
-
-    [DllImport("msvcrt.dll", EntryPoint = "_ldmxcsr", SetLastError = false, CallingConvention = CallingConvention.Cdecl)]
-    private static extern unsafe void __ldmxcsr(uint controlWord);
+    /// <summary>
+    /// Control del coprocesador de coma flotante del CRT. Se declara con DllImport por ser
+    /// una funcion variadica-free del CRT y no de la API de Windows; el generador de
+    /// LibraryImport no procesa este modulo.
+    /// </summary>
+    [DllImport("msvcrt.dll", EntryPoint = "_controlfp_s", SetLastError = false, CallingConvention = CallingConvention.Cdecl)]
+    private static extern int _controlfp_s(out uint current, uint newValue, uint mask);
 }

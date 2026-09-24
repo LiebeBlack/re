@@ -70,7 +70,19 @@ internal sealed class SettingsStore
             string json = File.ReadAllText(FilePath);
             SettingsStore? loaded = JsonSerializer.Deserialize<SettingsStore>(json, SerializerOptions);
 
-            return loaded ?? new SettingsStore();
+            if (loaded is null)
+            {
+                return new SettingsStore();
+            }
+
+            // Sanitizacion al leer: el archivo lo edito el usuario a mano si quiere, y un
+            // modo fuera del enum o una latencia absurda no deben llegar al motor.
+            loaded.EngineMode = loaded.EngineMode is 0 or 1
+                ? loaded.EngineMode
+                : 0;
+            loaded.LatencyMilliseconds = Math.Clamp(loaded.LatencyMilliseconds, 2.0, 200.0);
+
+            return loaded;
         }
         catch (Exception exception) when (
             exception is IOException or JsonException or UnauthorizedAccessException)

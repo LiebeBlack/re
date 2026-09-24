@@ -57,7 +57,7 @@ dotnet build Hidra.slnx -c Release
 dotnet run --project tests/Hidra.Verify -c Release
 ```
 
-El arnés ejecuta **más de 280 comprobaciones deterministas**, entre ellas:
+El arnés ejecuta **más de 300 comprobaciones deterministas**, entre ellas:
 
 - FFT contrastada contra una DFT directa, y **paridad bit a bit** entre el camino vectorial SIMD y el escalar.
 - Paridad de canal completo de extremo a extremo: tonos a 44,1 k y 48 k remuestreados en ambas direcciones y mezclados de mono a estéreo, verificando pico exacto y frecuencia dominante.
@@ -72,9 +72,11 @@ Las dos sondas que tocan hardware real (abrir el dispositivo de audio y emitir s
 dotnet run --project tests/Hidra.Verify -c Release -- --probe-audio
 ```
 
-## CI
+## CI y release continuo
 
-`.github/workflows/build.yml` ejecuta en cada *push*, sobre `windows-2022`: restauración, compilación con advertencias como errores, arnés completo, publicación estándar, una comprobación de completitud de la publicación (los diez archivos sin los que la aplicación arranca mal o no arranca) y subida del artefacto.
+`.github/workflows/build.yml` ejecuta en cada *push* y en cada *pull request*, sobre `windows-2022`: restauración, compilación con advertencias como errores, arnés completo, publicación estándar, una comprobación de completitud de la publicación (los trece archivos sin los que la aplicación arranca mal o no arranca) y subida del artefacto.
+
+`.github/workflows/release.yml` convierte cada push **integrado a `main`** en un Release de GitHub con instalador firmado. Se dispara al concluir con éxito el workflow `build` (mediante `workflow_run`), descarga el artefacto YA VERIFICADO de esa ejecución — no recompila nada, lo que publica es exactamente lo que pasó el arnés —, y firma con **Authenticode** cada binario ejecutable y biblioteca del paquete (`signtool` con digest SHA256 y sellado de tiempo RFC 3161, que mantiene la firma válida tras la expiración del certificado). El certificado llega como secret `PFX_BASE64` (Base64, con la cadena completa de cuatro entidades dentro del PFX) y su contraseña como `PFX_PASSWORD`; la clave privada se importa al almacén del runner, el fichero PFX se destruye con relleno a cero **antes** de seguir, y la contraseña nunca aparece en una línea de comandos. Después compila el **instalador Inno Setup** (tema oscuro, asociación de extensiones de audio vía `OpenWithProgids`, detección de runtimes, desinstalación limpia), firma también el instalador, destruye el certificado del almacén y publica el Release etiquetado `v0.0.0-<sha-corto>` con el instalador firmado y su checksum SHA256. La marca es el commit: un commit, un release; re-ejecutar CI actualiza el release del mismo commit en lugar de duplicarlo. Las *pull requests* nunca publican.
 
 ## Decisiones de diseño que no son obvias
 

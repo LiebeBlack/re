@@ -810,16 +810,14 @@ internal sealed unsafe class WasapiExclusiveOutput : IDisposable
                 Span<float> scratch = _scratch.Span[..samples];
                 _provider.Render(scratch, _format.Channels);
 
-                if (_provider is PlaybackPipeline { IsBitPerfectPassthrough: true } pipeline
-                    && pipeline.Volume == 1.0)
-                {
-                    // Modo transparente: la fuente ya viaja sin alteracion y el volumen
-                    // esta a la unidad. Ni limitador ni recorte: tocar la muestra aqui
-                    // romperia la garantia bit a bit que el estado declara. Con volumen
-                    // distinto de uno la rampa de ganancia altera las muestras y el
-                    // limitador vuelve a aplicar.
-                }
-                else
+                // Modo transparente: la fuente ya viaja sin alteracion y el volumen esta a
+                // la unidad. Ni limitador ni recorte: tocar la muestra aqui romperia la
+                // garantia bit a bit que el estado declara. Con volumen distinto de uno la
+                // rampa de ganancia altera las muestras y el limitador vuelve a aplicar.
+                bool transparent = _provider is PlaybackPipeline { IsBitPerfectPassthrough: true }
+                    && ((PlaybackPipeline)_provider).Volume == 1.0;
+
+                if (!transparent)
                 {
                     // Limitador de rodilla suave en lugar de recorte duro: los picos entre
                     // muestras se comprimen con tangente hiperbolica por encima de -0.1
