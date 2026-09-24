@@ -48,18 +48,38 @@ internal sealed class PlaybackPipeline : ISampleProvider, IDisposable
     private const int ScopeMask = ScopeFrames - 1;
 
     /// <summary>
-    /// Margen que se suma a cada bloque para alojar la cola que arrastra el remuestreador.
+    /// Margen base que se suma a cada bloque cuando NO hay remuestreo. Con remuestreo, el
+    /// margen se adapta a la instancia activa: <c>resampler.TapsPerPhase + 8</c>.
     /// </summary>
     /// <remarks>
     /// El margen tiene que ser al menos la ventana del filtro, no su retardo. El filtro no
     /// puede producir la ultima muestra hasta que la ventana completa cae dentro del bloque,
     /// de modo que lo que sobra al final de cada vuelta es del orden de un numero de
     /// coeficientes, no del retardo del centro. Confundir ambos deja el indice fuera del
-    /// arreglo en cuanto el residuo supera el margen.
+    /// arreglo en cuanto el residuo supera el margen. Al depender de la instancia (64 o 128
+    /// taps segun calidad), el margen ya no puede ser constante de compilacion.
     /// </remarks>
-    private const int CarryMargin = SincResampler.TapsPerPhase + 8;
+    private const int BaseCarryMargin = 8;
+
+    /// <summary>Ganancia de resguardo para picos inter-muestra: -0.2 dBFS en lineal.</summary>
+    /// <remarks>
+    /// La interpolacion sinc puede generar picos ENTRE muestras que superan 0 dBFS aunque
+    /// todas las muestras del archivo esten por debajo (inter-sample peaks). El margen
+    /// reduce el nivel de todo el material remuestreado esa fraccion; el limitador suave
+    /// de la salida se queda a cargo de cualquier pico residual.
+    /// </remarks>
+    private const float ResampleHeadroom = 0.977239f;
 
     private readonly SpscRingBuffer<float> _ring = new(RingSamples);
+
+    /// <summary>Calidad del remuestreo que se aplicara en la proxima carga de archivo.</summary>
+    /// <remarks>
+    /// Se lee al construir los remuestreadores en <see cref="Load"/>: cambiarla en marcha
+    /// afecta al archivo siguiente, no al actual, porque los buffers de trabajo se dimensionan
+    /// con el margen que depende de los taps elegidos.
+    /// </remarks>
+    public SincResampler.ResamplerQuality ResamplerQuality { get; set; }
+        = SincResampler.ResamplerQuality.Standard;
     private readonly WaitEvent _stopRequested = new(manualReset: true, initialState: false);
     private readonly WaitEvent _playRequested = new(manualReset: true, initialState: false);
     private readonly Lock _stateGate = new();
@@ -113,6 +133,17 @@ internal sealed class PlaybackPipeline : ISampleProvider, IDisposable
 
     /// <summary>Formato del archivo cargado.</summary>
     public AudioFormat SourceFormat { get; private set; }
+
+    /// <summary>
+    /// True cuando la cadena actual transmite la fuente SIN ninguna alteracion numerica.
+    /// </summary>
+    /// <remarks>
+    /// Se cumple cuando la frecuencia del archivo coincide con la del dispositivo, los
+    /// canales son identicos (no hay mezcla) y el volumen esta a la unidad. En ese estado
+    /// la capa de salida omite limitador y conversion de recorte: lo que sale por el DAC
+    /// es el flujo decodificado bit a bit.
+    /// </remarks>
+    public bool IsBitPerfectPassthrough { get; private set; }
 
     /// <summary>True cuando el archivo se ha consumido por completo.</summary>
     public bool EndOfStream { get; private set; }
@@ -181,6 +212,44 @@ internal sealed class PlaybackPipeline : ISampleProvider, IDisposable
     }
 
     /// <summary>
+    /// Rearma la cadena para un nuevo formato de dispositivo conservando el archivo y la
+    /// posicion de reproduccion.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Aplica cuando la ventana de ajustes cambia la latencia o el regimen del motor: el
+    /// formato concedido puede cambiar (otro regimen acepta otra codificacion), y la cadena
+    /// de conversion tiene que rearmarse ANTES de que el archivo vuelva a entrar en cola.
+    /// Lo que se conserva es la posicion dentro del archivo, no el material en cola: la
+    /// cola se vacia y el pre-llenado de la busqueda vuelve a llenarla desde la posicion.
+    /// </para>
+    /// <para>
+    /// La secuencia importa: configurar primero y buscar despues. Seek valida el formato
+    /// contra la configuracion nueva y su pre-llenado deja material de la posicion vieja
+    /// delante del consumidor antes de reactivar el render, de modo que el salto es
+    /// inaudible salvo por el cambio de motor.
+    /// </para>
+    /// </remarks>
+    /// <param name="sampleRate">Frecuencia de muestreo del motor nuevo.</param>
+    /// <param name="channels">Canales del motor nuevo.</param>
+    /// <param name="position">Posicion del archivo que debe quedar sonando.</param>
+    public void RestartEngine(int sampleRate, int channels, TimeSpan position)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(sampleRate);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(channels);
+
+        Configure(sampleRate, channels);
+
+        if (_sourcePath is not null)
+        {
+            // El render ya esta apagado: Unload lo baja, y Seek lo deja asi hasta que el
+            // pre-llenado termina y lo reactiva por su cuenta si hacia falta.
+            Seek(position);
+        }
+    }
+
+    /// <summary>
     /// Volumen de salida, de 0 a 1.
     /// </summary>
     /// <remarks>
@@ -221,12 +290,23 @@ internal sealed class PlaybackPipeline : ISampleProvider, IDisposable
             int fileChannels = decoder.Format.Channels;
             int outputChannels = MapChannels(fileChannels, deviceChannels, path);
 
-            int workFrames = DecodeBlockFrames + CarryMargin;
+            // El margen de arrastre se adapta a la calidad del remuestreador que va a
+            // construirse: 64 taps piden 72 fotogramas de margen, 128 piden 136. Sin
+            // remuestreo no hay ventana de filtro que alimentar y basta el margen base.
+            bool resampling = fileRate != deviceRate;
+            int taps = resampling
+                ? (ResamplerQuality == SincResampler.ResamplerQuality.MaximumQuality
+                    ? SincResampler.MaxTapsPerPhase
+                    : SincResampler.DefaultTapsPerPhase)
+                : 0;
+            int carryMargin = taps + BaseCarryMargin;
+
+            int workFrames = DecodeBlockFrames + carryMargin;
 
             // Al convertir hacia arriba salen mas muestras de las que entran, con la relacion
             // de salida sobre entrada, que es la inversa de la del remuestreador.
             double expansion = (double)deviceRate / fileRate;
-            int convertedCapacity = (int)Math.Ceiling(workFrames * expansion) + CarryMargin;
+            int convertedCapacity = (int)Math.Ceiling(workFrames * expansion) + carryMargin;
 
             _decodeScratch = new float[DecodeBlockFrames * fileChannels];
             _channelScratch = new float[fileChannels][];
@@ -239,7 +319,7 @@ internal sealed class PlaybackPipeline : ISampleProvider, IDisposable
                 _channelScratch[channel] = new float[workFrames];
                 _resamplers[channel] = fileRate == deviceRate
                     ? null
-                    : new SincResampler(fileRate, deviceRate);
+                    : new SincResampler(fileRate, deviceRate, ResamplerQuality);
             }
 
             for (int channel = 0; channel < outputChannels; channel++)
@@ -263,6 +343,12 @@ internal sealed class PlaybackPipeline : ISampleProvider, IDisposable
             _sourcePath = path;
             SourceFormat = decoder.Format;
             EndOfStream = false;
+
+            // Passthrough bit-perfecto: fuente y endpoint en LA MISMA frecuencia y canales
+            // significa que no hay remuestreador, no hay correspondencia de canales y la
+            // cadena entrega las muestras del archivo sin tocar un bit. La salida sabe de
+            // este estado a traves de IsTransparent y omite limitador y recorte.
+            IsBitPerfectPassthrough = !resampling && fileChannels == outputChannels;
 
             _ring.Reset();
             Interlocked.Exchange(ref _renderedFrames, 0);
@@ -589,6 +675,12 @@ internal sealed class PlaybackPipeline : ISampleProvider, IDisposable
                 LastError = exception;
                 EndOfStream = true;
                 _playRequested.Reset();
+
+                // El estado de render es lo que la interfaz muestra como "reproduciendo" y
+                // lo que mantiene al hilo de audio consumiendo la cola. Con el decodificador
+                // muerto no va a entrar material nuevo: dejar el render activo seria un
+                // boton de pausa que no pausa y un espectro congelado sobre silencio.
+                Volatile.Write(ref _renderActive, false);
             }
         }
     }
@@ -806,8 +898,21 @@ internal sealed class PlaybackPipeline : ISampleProvider, IDisposable
                     _convertedScratch[channel]);
             }
 
+            // Margen de resguardo contra picos inter-muestra, solo con remuestreo activo:
+            // es la interpolacion la que puede sobrepasar 0 dBFS entre muestras. Se aplica
+            // multiplicando la salida ya convertida; el coste es una pasada vectorizable
+            // por bloque, despreciable frente al producto escalar del filtro.
+            for (int channel = 0; channel < _fileChannels; channel++)
+            {
+                Span<float> plane = _convertedScratch[channel].AsSpan(0, converted);
+                for (int i = 0; i < plane.Length; i++)
+                {
+                    plane[i] *= ResampleHeadroom;
+                }
+            }
+
             SincResampler first = _resamplers[0]!;
-            long nextFirst = (long)Math.Floor(first.NextPosition) - SincResampler.LatencyInInputSamples;
+            long nextFirst = (long)Math.Floor(first.NextPosition) - first.Latency;
             long consumed = Math.Clamp(nextFirst - _convertBase, 0, total);
             int carry = total - (int)consumed;
 
@@ -926,7 +1031,9 @@ internal sealed class PlaybackPipeline : ISampleProvider, IDisposable
         _currentGain = target;
     }
 
-    private void CaptureScope(Span<float> destination, int channels)
+    // CaptureScope solo lee el bloque reproducido: ReadOnlySpan expresa ese contrato y es
+    // lo que la regla CA1517 exige aqui.
+    private void CaptureScope(ReadOnlySpan<float> destination, int channels)
     {
         int frames = destination.Length / channels;
         long write = _scopeWrite;

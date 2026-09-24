@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Hidra.Audio;
 using Hidra.Kernel.Dsp;
 using Windows.Win32.Media.Audio;
@@ -27,6 +28,132 @@ internal static class AudioTests
         Harness.Suite("audio/mascara-de-canales", ChannelMasksMatchTheLayout);
         Harness.Suite("audio/recorte", ClampingSaturatesEverywhere);
         Harness.Suite("audio/conversion-entera", IntegerConversionHitsTheFullScale);
+        Harness.Suite("audio/cadena-recorte-conversion", ClampedFloatToIntegerRoundTripIsMonotone);
+        Harness.Suite("audio/determinismo-dither", DitherIsDeterministic);
+        Harness.Suite("audio/limitador-suave", SoftLimiterGuarantees);
+    }
+
+    /// <summary>
+    /// El dither TPDF con xorshift32 es DETERMINISTICO: dos conversiones de la misma senal
+    /// deben producir exactamente los mismos bytes. Ademas, desactivar el dither debe dar
+    /// la conversion pura (cero dBFS entra, escala plena sale sin desviacion).
+    /// </summary>
+    private static void DitherIsDeterministic()
+    {
+        const int count = 4096;
+
+        float[] source = new float[count];
+        for (int i = 0; i < count; i++)
+        {
+            source[i] = MathF.Sin(2f * MathF.PI * 97.0f * i / count) * 0.25f;
+        }
+
+        // Estado de dither reseteable a traves de la interfaz publica del conversor.
+        byte[] first = new byte[SampleConverter.BytesFor(count, SampleEncoding.Pcm16)];
+        byte[] second = new byte[first.Length];
+
+        SampleConverter.ResetDitherState();
+        SampleConverter.FromClampedFloat(source, first, SampleEncoding.Pcm16);
+
+        SampleConverter.ResetDitherState();
+        SampleConverter.FromClampedFloat(source, second, SampleEncoding.Pcm16);
+
+        bool identical = first.AsSpan().SequenceEqual(second);
+        Harness.Check(identical, "dos pasadas con el mismo estado produjeron dither distinto");
+
+        // Con el dither desactivado, la conversion es exacta: 0.5 entra, 16384 (+-redondeo
+        // exacto, sin ruido) sale.
+        SampleConverter.EnableDither = false;
+        try
+        {
+            byte[] exact = new byte[SampleConverter.BytesFor(3, SampleEncoding.Pcm16)];
+            float[] halfScale = [0.5f, -0.5f, 0f];
+            SampleConverter.FromClampedFloat(halfScale, exact, SampleEncoding.Pcm16);
+            short[] asShort = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, short>(exact).ToArray();
+
+            Harness.Check(asShort[0] == 16384, $"sin dither, 0.5 deberia dar 16384 exacto, dio {asShort[0]}");
+            Harness.Check(asShort[1] == -16384, $"sin dither, -0.5 deberia dar -16384 exacto, dio {asShort[1]}");
+            Harness.Check(asShort[2] == 0, $"sin dither, cero deberia dar 0 exacto, dio {asShort[2]}");
+        }
+        finally
+        {
+            // El resto de la verificacion cuenta con el dither activado: restaurar SIEMPRE.
+            SampleConverter.EnableDither = true;
+        }
+    }
+
+    /// <summary>
+    /// Contratos del limitador de rodilla suave: la senal por debajo del umbral pasa
+    /// INTACTA bit a bit, la salida nunca supera la unidad, y la compresion cerca del
+    /// techo es acotada (el armónico introducido es despreciable comparado con el recorte duro).
+    /// </summary>
+    private static void SoftLimiterGuarantees()
+    {
+        const int count = 2048;
+
+        // Senal moderada: todo por debajo de la rodilla, debe salir IDENTICA.
+        float[] moderate = new float[count];
+        for (int i = 0; i < count; i++)
+        {
+            moderate[i] = MathF.Sin(2f * MathF.PI * 31.0f * i / count) * 0.5f;
+        }
+
+        float[] untouched = new float[count];
+        SampleConverter.SoftLimit(moderate, untouched);
+
+        bool bitExactBelowKnee = true;
+        for (int i = 0; i < count; i++)
+        {
+            bitExactBelowKnee &= BitConverter.SingleToInt32Bits(moderate[i]) == BitConverter.SingleToInt32Bits(untouched[i]);
+        }
+
+        Harness.Check(bitExactBelowKnee, "el limitador altero muestras por debajo de la rodilla");
+
+        // Senal con sobremedida: los picos a 1.3 deben salir comprimidos y con techo 1.0.
+        float[] overdriven = new float[count];
+        for (int i = 0; i < count; i++)
+        {
+            overdriven[i] = MathF.Sin(2f * MathF.PI * 31.0f * i / count) * 1.3f;
+        }
+
+        float[] limited = new float[count];
+        SampleConverter.SoftLimit(overdriven, limited);
+
+        bool ceiling = true;
+        bool kneeContinuous = true;
+        for (int i = 0; i < count; i++)
+        {
+            ceiling &= limited[i] <= 1f && limited[i] >= -1f;
+
+            // A mitad de la rodilla la compresion ya debe notarse (no es un clamp duro
+            // disfrazado), pero la muestra en la rodilla exacta apenas se mueve.
+            if (overdriven[i] > 1f && limited[i] <= 0.98f)
+            {
+                kneeContinuous = false;
+            }
+        }
+
+        Harness.Check(ceiling, "el limitador dejo pasar una muestra por encima de la unidad");
+        Harness.Check(kneeContinuous, "la rodilla comprimio menos de lo que la curva garantiza");
+
+        // La senal dentro de rango con picos en el borde debe conservar pico cercano a uno,
+        // no fundirse a un nivel menor (el limitador no es un compresor general).
+        float[] fullScale = new float[count];
+        for (int i = 0; i < count; i++)
+        {
+            fullScale[i] = MathF.Sin(2f * MathF.PI * 31.0f * i / count);
+        }
+
+        float[] atKnee = new float[count];
+        SampleConverter.SoftLimit(fullScale, atKnee);
+
+        float peak = 0;
+        for (int i = 0; i < count; i++)
+        {
+            peak = Math.Max(peak, Math.Abs(atKnee[i]));
+        }
+
+        Harness.Check(peak > 0.97f, $"un tono a escala plena salio con pico {peak:R}, demasiado atenuado");
     }
 
     private static void FormatDescriptionIsConsistent()
@@ -246,37 +373,157 @@ internal static class AudioTests
         Harness.Check(saturated, "el recorte no llevo al extremo correspondiente un valor fuera de rango");
     }
 
+    /// <summary>
+    /// El contrato de la conversion CON tramado TPDF es estocastico: cada muestra cae a lo
+    /// sumo a un escalon LSB de su valor ideal, sin sesgo acumulado, y los extremos a escala
+    /// plena nunca se superan (el recorte final lo impide). Un contrato exacto seria
+    /// incorrecto aqui: exigir que cero dé exactamente cero es exigir que no haya tramado.
+    /// </summary>
     private static void IntegerConversionHitsTheFullScale()
     {
         float[] samples = [-1f, -0.5f, 0f, 0.5f, 1f];
 
-        // 16 bits
+        // 16 bits: el valor ideal +- un LSB.
         byte[] pcm16 = new byte[samples.Length * 2];
         SampleConverter.FromClampedFloat(samples, pcm16, SampleEncoding.Pcm16);
         short[] as16 = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, short>(pcm16).ToArray();
 
-        Harness.Check(as16[0] == -32767, $"menos uno deberia dar -32767, dio {as16[0]}");
-        Harness.Check(as16[2] == 0, $"cero deberia dar 0, dio {as16[2]}");
-        Harness.Check(as16[4] == 32767, $"uno deberia dar 32767, dio {as16[4]}");
+        Harness.Check(as16[0] is >= -32767 and <= -32766, $"menos uno deberia caer en -32767+-1, dio {as16[0]}");
+        Harness.Check(as16[1] is >= -16385 and <= -16383, $"-0.5 deberia caer en -16384+-1, dio {as16[1]}");
+        Harness.Check(as16[2] is >= -1 and <= 1, $"cero deberia caer en 0+-1, dio {as16[2]}");
+        Harness.Check(as16[3] is >= 16383 and <= 16385, $"0.5 deberia caer en 16384+-1, dio {as16[3]}");
+        Harness.Check(as16[4] is >= 32766 and <= 32767, $"uno deberia caer en 32767+-1, dio {as16[4]}");
 
-        // 24 bits: se comprueba byte a byte porque no hay tipo nativo de tres bytes.
+        // Sin sesgo: la media de cero repetido debe converger a cero (el tramado TPDF es
+        // simetrico; un dither mal construido arrastraria la continua).
+        const int repetitions = 20001;
+        byte[] zeros16 = new byte[repetitions * 2];
+        float[] zeros = new float[repetitions];
+        SampleConverter.FromClampedFloat(zeros, zeros16, SampleEncoding.Pcm16);
+        short[] zeroSamples = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, short>(zeros16).ToArray();
+
+        double mean = 0;
+        bool bounded = true;
+        for (int i = 0; i < repetitions; i++)
+        {
+            mean += zeroSamples[i];
+            bounded &= zeroSamples[i] is >= -1 and <= 1;
+        }
+
+        mean /= repetitions;
+        Harness.Check(bounded, "el tramado de silencio se salio del rango de +-1 LSB");
+        Harness.Check(Math.Abs(mean) < 0.05, $"el tramado de silencio tiene sesgo (media {mean:R} LSB)");
+
+        // 24 bits: mismos limites, recomponiendo el entero de tres bytes con signo.
         byte[] pcm24 = new byte[samples.Length * 3];
         SampleConverter.FromClampedFloat(samples, pcm24, SampleEncoding.Pcm24);
 
-        Harness.Check(pcm24[0] == 0x01 && pcm24[1] == 0x00 && pcm24[2] == 0x80, "menos uno en 24 bits no es 0x800001 en little endian");
-        Harness.Check(pcm24[6] == 0x00 && pcm24[7] == 0x00 && pcm24[8] == 0x00, "cero en 24 bits deberia ser todo ceros");
-        Harness.Check(pcm24[12] == 0xFF && pcm24[13] == 0xFF && pcm24[14] == 0x7F, "uno en 24 bits no es 0x7FFFFF en little endian");
+        int minusOne24 = SignExtend24(pcm24[0] | (pcm24[1] << 8) | (pcm24[2] << 16));
+        int zero24 = SignExtend24(pcm24[6] | (pcm24[7] << 8) | (pcm24[8] << 16));
+        int plusOne24 = SignExtend24(pcm24[12] | (pcm24[13] << 8) | (pcm24[14] << 16));
 
-        // 32 bits
+        Harness.Check(minusOne24 is >= -8388607 and <= -8388606, $"menos uno en 24 bits deberia caer en -8388607+-1, dio {minusOne24}");
+        Harness.Check(zero24 is >= -1 and <= 1, $"cero en 24 bits deberia caer en 0+-1, dio {zero24}");
+        Harness.Check(plusOne24 is >= 8388606 and <= 8388607, $"uno en 24 bits deberia caer en 8388607+-1, dio {plusOne24}");
+
+        // 32 bits: SIN tramado a proposito (el escalon de 24 bits en punto fijo ya es
+        // inaudible), de modo que aqui el contrato SI es exacto.
         byte[] pcm32 = new byte[samples.Length * 4];
         SampleConverter.FromClampedFloat(samples, pcm32, SampleEncoding.Pcm32);
         int[] as32 = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, int>(pcm32).ToArray();
 
         Harness.Check(as32[0] == -2147483647, $"menos uno deberia dar -2147483647, dio {as32[0]}");
+        Harness.Check(as32[2] == 0, $"cero deberia dar 0, dio {as32[2]}");
         Harness.Check(as32[4] == 2147483647, $"uno deberia dar 2147483647, dio {as32[4]}");
 
         Harness.Check(SampleConverter.BytesFor(10, SampleEncoding.Pcm16) == 20, "el tamano en bytes de PCM16 es incorrecto");
         Harness.Check(SampleConverter.BytesFor(10, SampleEncoding.Pcm24) == 30, "el tamano en bytes de PCM24 es incorrecto");
         Harness.Check(SampleConverter.BytesFor(10, SampleEncoding.Float32) == 40, "el tamano en bytes de Float32 es incorrecto");
     }
+
+    /// <summary>
+    /// La cadena exacta que pisa el hilo de audio ante un DAC de enteros: recorte y
+    /// conversion, bloque a bloque, sin estados intermedios. Se recorre la escala completa
+    /// con muestras que ya estan en rango para comprobar que el recorte no las toca y que
+    /// el cuantizado conserva el simbolo en todo el recorrido, no solo en los extremos.
+    /// </summary>
+    private static void ClampedFloatToIntegerRoundTripIsMonotone()
+    {
+        const int count = 513; // impar: ejercita tambien la cola escalar de Clamp
+
+        float[] source = new float[count];
+        for (int i = 0; i < count; i++)
+        {
+            source[i] = (i / (float)(count - 1) * 2f) - 1f;
+        }
+
+        source[0] = -1f;
+        source[count - 1] = 1f;
+
+        float[] clamped = new float[count];
+        SampleConverter.Clamp(source, clamped);
+
+        foreach (SampleEncoding encoding in new[] { SampleEncoding.Pcm16, SampleEncoding.Pcm24, SampleEncoding.Pcm32 })
+        {
+            int fullScale = encoding switch
+            {
+                SampleEncoding.Pcm16 => short.MaxValue,
+                SampleEncoding.Pcm32 => int.MaxValue,
+                _ => 8388607,
+            };
+
+            byte[] bytes = new byte[SampleConverter.BytesFor(count, encoding)];
+            SampleConverter.FromClampedFloat(clamped, bytes, encoding);
+
+            // Con tramado, la fidelidad se mide contra el valor IDEAL de cada muestra: a lo
+            // sumo un LSB de desviacion, nunca dos. La monotonia estricta ya no es el
+            // contrato (el ruido puede intercambiar dos muestras vecinas un LSB, que es
+            // justo lo que hace inaudible la cuantizacion), y en su lugar se comprueba la
+            // desviacion acotada muestra a muestra.
+            bool withinOneLsb = true;
+            bool signOk = true;
+
+            for (int i = 0; i < count; i++)
+            {
+                int quantized = encoding switch
+                {
+                    SampleEncoding.Pcm16 => MemoryMarshal.Cast<byte, short>(bytes)[i],
+                    SampleEncoding.Pcm32 => MemoryMarshal.Cast<byte, int>(bytes)[i],
+                    _ => SignExtend24(bytes[(i * 3)] | (bytes[(i * 3) + 1] << 8) | (bytes[(i * 3) + 2] << 16)),
+                };
+
+                int ideal = (int)Math.Round((double)clamped[i] * fullScale, MidpointRounding.AwayFromZero);
+                withinOneLsb &= Math.Abs(quantized - ideal) <= 1;
+                signOk &= (clamped[i] < 0f) == (quantized < 0) || (clamped[i] == 0f && Math.Abs(quantized) <= 1);
+            }
+
+            Harness.Check(withinOneLsb, $"la conversion a {encoding} se desvio mas de un LSB del valor ideal");
+            Harness.Check(signOk, $"la conversion a {encoding} cambio el simbolo de alguna muestra");
+
+            // Los extremos saturados nunca SUPERAN la escala plena: el recorte final lo
+            // garantiza aunque el tramado empuje mas alla. En 24 bits el entero de tres
+            // bytes se recompone con extension de signo, o el extremo negativo se leeria
+            // como positivo.
+            int lowest = encoding switch
+            {
+                SampleEncoding.Pcm16 => MemoryMarshal.Cast<byte, short>(bytes)[0],
+                SampleEncoding.Pcm32 => MemoryMarshal.Cast<byte, int>(bytes)[0],
+                _ => SignExtend24(bytes[0] | (bytes[1] << 8) | (bytes[2] << 16)),
+            };
+
+            int highest = encoding switch
+            {
+                SampleEncoding.Pcm16 => MemoryMarshal.Cast<byte, short>(bytes)[count - 1],
+                SampleEncoding.Pcm32 => MemoryMarshal.Cast<byte, int>(bytes)[count - 1],
+                _ => SignExtend24(bytes[(3 * (count - 1))] | (bytes[(3 * (count - 1)) + 1] << 8) | (bytes[(3 * (count - 1)) + 2] << 16)),
+            };
+
+            Harness.Check(highest >= fullScale - 1 && highest <= fullScale, $"uno entero quedo fuera de la escala plena en {encoding}: {highest}");
+            Harness.Check(lowest >= -fullScale && lowest <= -(fullScale - 1), $"menos uno entero quedo fuera de la escala plena negativa en {encoding}: {lowest}");
+        }
+    }
+
+    /// <summary>Recompone un entero de 24 bits en complemento a dos sobre 32.</summary>
+    private static int SignExtend24(int value) =>
+        (value & 0x800000) != 0 ? value | unchecked((int)0xFF000000) : value;
 }

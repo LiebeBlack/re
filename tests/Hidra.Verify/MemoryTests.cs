@@ -11,6 +11,7 @@ internal static class MemoryTests
         Harness.Suite("memoria/alineacion", AlignmentIsRespected);
         Harness.Suite("memoria/cola-vuelta", WrapsAroundWithoutLosingData);
         Harness.Suite("memoria/cola-spsc", ProducerConsumerKeepsOrder);
+        Harness.Suite("memoria/cola-reinicio-concurrente", ResetUnderConcurrentReaderReturnsNothing);
         Harness.Suite("ventanas/coherencia", WindowFunctionsAreSane);
     }
 
@@ -177,6 +178,61 @@ internal static class MemoryTests
         Harness.Check(failure is null, $"excepcion dentro de un hilo: {failure?.Message}");
         Harness.Check(received == total, $"se recibieron {received} de {total} elementos");
         Harness.Check(ordered, "se perdio o se altero el orden de los elementos");
+    }
+
+    /// <summary>
+    /// Un reinicio de la cola mientras el consumidor esta a medio operacion es el caso que
+    /// rompe la invariante de los indices monotonos: los indices se cruzan y el recuento
+    /// declarado deja de tener sentido. La cola debe reconocer ese estado transitorio y
+    /// devolver cero, no copiar con indices sin sentido.
+    /// </summary>
+    private static void ResetUnderConcurrentReaderReturnsNothing()
+    {
+        using var buffer = new SpscRingBuffer<float>(1024);
+        var data = new float[512];
+        var sink = new float[1024];
+
+        for (int i = 0; i < data.Length; i++)
+        {
+            data[i] = i;
+        }
+
+        _ = buffer.Write(data);
+
+        // Un productor sigue empujando mientras el reinicio y las lecturas se cruzan: el
+        // escenario reproduce la descarga de un archivo con el callback de audio en marcha.
+        using ManualResetEventSlim stop = new(false);
+        var writer = new Thread(() =>
+        {
+            while (!stop.IsSet)
+            {
+                _ = buffer.Write(data);
+            }
+        });
+
+        writer.Start();
+
+        long nonsense = 0;
+        for (int round = 0; round < 20_000; round++)
+        {
+            buffer.Reset();
+
+            // La lectura tras el reinicio debe devolver como mucho lo que haya publicado un
+            // productor DESPUES del reinicio, y nunca un recuento que desborde la capacidad
+            // ni un valor negativo disfrazado de disponible.
+            int read = buffer.Read(sink);
+            nonsense += read < 0 || read > buffer.Capacity ? 1 : 0;
+        }
+
+        stop.Set();
+        writer.Join();
+
+        Harness.Check(nonsense == 0, $"la cola declaro disponible material inexistente {nonsense} veces");
+
+        // Y tras dejar de reiniciar, la cola vuelve a ser operativa de forma inmediata.
+        buffer.Reset();
+        Harness.Check(buffer.Write(data) == data.Length, "la cola no volvio a aceptar escrituras tras el paro");
+        Harness.Check(buffer.Read(sink) == data.Length, "la cola no devolvio lo escrito tras el paro");
     }
 
     private static void WindowFunctionsAreSane()

@@ -46,17 +46,18 @@ internal sealed unsafe class WasapiExclusiveOutput : IDisposable
     /// Codificaciones que se sondean, en orden de preferencia.
     /// </summary>
     /// <remarks>
-    /// 24 bits primero porque es la profundidad nativa de la mayoria de convertidores
-    /// dedicados y conserva mas rango dinamico que 16; despues 16 bits, que es lo que admite
-    /// cualquier dispositivo incluidos los virtuales; despues 32 bits enteros, y por ultimo
-    /// coma flotante, que suele ser una comodidad del motor por software y no del hardware.
+    /// 24 bits enteros primero: es la profundidad nativa de la mayoria de DACs dedicados,
+    /// de los HDMI de Intel y de los Realtek HDA recientes, y conserva el rango dinamico
+    /// completo del material. 32 detras, para los endpoints que lo exigen; despues 16,
+    /// el suelo universal; la coma flotante al final porque suele ser una comodidad del
+    /// motor por software y no del hardware.
     /// </remarks>
     private static readonly SampleEncoding[] PreferredEncodings =
     [
         SampleEncoding.Pcm24,
-        SampleEncoding.Pcm16,
         SampleEncoding.Pcm32,
         SampleEncoding.Float32,
+        SampleEncoding.Pcm16,
     ];
 
     /// <summary>Codigo de error de modo de apartamento ya establecido por otro componente.</summary>
@@ -84,6 +85,12 @@ internal sealed unsafe class WasapiExclusiveOutput : IDisposable
     private bool _disposed;
 
     /// <summary>Abre el dispositivo por defecto y arranca la reproduccion.</summary>
+    /// <remarks>
+    /// Si el constructor lanza, los recursos parciales se liberan aqui y no en el propio
+    /// constructor: <see cref="Dispose"/> ya sabe liberar cada pieza de forma condicional,
+    /// y duplicar esa logica en dos sitios es como se introducen fugas cuando una de las
+    /// dos copias deja de corresponderse con la otra.
+    /// </remarks>
     /// <param name="provider">Fuente de muestras.</param>
     /// <param name="targetLatency">Latencia de buffer deseada. El dispositivo puede conceder otra.</param>
     /// <param name="mode">Regimen deseado. Por defecto, exclusivo.</param>
@@ -99,8 +106,20 @@ internal sealed unsafe class WasapiExclusiveOutput : IDisposable
         bool allowSharedFallback = true)
     {
         WasapiExclusiveOutput output = new(provider, targetLatency, mode, allowSharedFallback);
-        output.StartRenderThread();
-        return output;
+
+        // Si el arranque del hilo falla (es lo unico que puede fallar despues del
+        // constructor), el objeto ya posee eventos de kernel, un cliente WASAPI y un
+        // apartamento COM: hay que liberarlo aunque nunca llegara a devolverse.
+        try
+        {
+            output.StartRenderThread();
+            return output;
+        }
+        catch
+        {
+            output.Dispose();
+            throw;
+        }
     }
 
     /// <summary>Formato nativo del dispositivo, al que se ha ajustado el flujo.</summary>
@@ -192,10 +211,21 @@ internal sealed unsafe class WasapiExclusiveOutput : IDisposable
                 // mantendria el endpoint bloqueado y el siguente intento fallaria igual.
                 ReleaseResourcesAfterFailure();
 
+                // Reempaquetar la excepcion conserva la causa original, que es lo que la
+                // capa de interfaz muestra; WasapiException expone el HRESULT sin tocar.
                 throw new WasapiException(
                     $"{exception.Message} Traza de negociacion: {string.Join(" | ", _negotiationLog)}",
                     exception.HResult,
                     exception);
+            }
+            catch
+            {
+                // Un fallo que no es COMException (la excepcion propia WasapiException de los
+                // reintentos agotados, o un formato del mezclador desconocido) tambien deja
+                // cliente, bloque de formato y eventos vivos: sin esta clausula escaparian
+                // todos y el endpoint quedaria bloqueado hasta cerrar el proceso.
+                ReleaseResourcesAfterFailure();
+                throw;
             }
             finally
             {
@@ -218,6 +248,9 @@ internal sealed unsafe class WasapiExclusiveOutput : IDisposable
             }
         }
 
+        // En modo flotante no se usa la memoria intermedia: la fuente escribe directo sobre
+        // el buffer del dispositivo. El buffer de cero elementos es solo para que Dispose
+        // tenga siempre un objeto valido que liberar.
         _scratch = _format.IsFloat ? new AlignedBuffer<float>(0) : new AlignedBuffer<float>(_bufferFrames * _format.Channels);
 
         Statistics.BufferFrames = _bufferFrames;
@@ -234,7 +267,16 @@ internal sealed unsafe class WasapiExclusiveOutput : IDisposable
         };
     }
 
-    /// <summary>Libera todo lo que se haya podido adquirir antes de un fallo de apertura.</summary>
+    /// <summary>
+    /// Libera todo lo que se haya podido adquirir antes de un fallo de apertura.
+    /// </summary>
+    /// <remarks>
+    /// Solo se invoca desde el constructor: si la apertura falla, la instancia nunca llega
+    /// a escapar y nadie mas llamara a <see cref="Dispose"/>, de modo que aqui se libera
+    /// TODO, eventos de kernel y apartamento COM incluidos. Desinicializar dos veces el
+    /// apartamento de un hilo corrompe el recuento de referencias COM del proceso, y el
+    /// unico modo de evitarlo es que exista un solo limpiador por camino.
+    /// </remarks>
     private void ReleaseResourcesAfterFailure()
     {
         if (_client is not null)
@@ -243,6 +285,9 @@ internal sealed unsafe class WasapiExclusiveOutput : IDisposable
             _client = null;
         }
 
+        // El doble Dispose no existe: los eventos y el bloque de formato son idempotentes,
+        // y el campo no se anula porque su declaracion no admite null y estos dos limpiadores
+        // nunca se ejecutan sobre la misma instancia.
         _formatBlock?.Dispose();
         _bufferReady.Dispose();
         _stopRequested.Dispose();
@@ -518,9 +563,6 @@ internal sealed unsafe class WasapiExclusiveOutput : IDisposable
     }
 
     /// <summary>
-    /// Pide el flujo sin procesar y solicita el buffer, gestionando la desalineacion.
-    /// </summary>
-    /// <summary>
     /// Inicializa el flujo y absorbe las dos negociaciones que el dispositivo puede exigir.
     /// </summary>
     /// <remarks>
@@ -687,35 +729,58 @@ internal sealed unsafe class WasapiExclusiveOutput : IDisposable
     {
         // El hilo de audio tambien necesita su apartamento COM: los punteros de WASAPI son
         // agiles, pero el apartamento debe declararse antes de usarlos desde otro hilo.
-        _ = PInvoke.CoInitializeEx(null, COINIT.COINIT_MULTITHREADED);
+        // S_FALSE significa que ESTE hilo ya lo tenia inicializado: el recuento quedo en
+        // el del llamador previo, y revertirlo aqui dejaria el hilo sin apartamento para
+        // quien venga despues. RPC_E_CHANGED_MODE significa que otro componente lo dejo en
+        // apartamento de un solo hilo: se puede seguir usando COM, pero no es nuestro.
+        HRESULT apartment = PInvoke.CoInitializeEx(null, COINIT.COINIT_MULTITHREADED);
+        bool ownsApartment = apartment.Succeeded && apartment.Value != 1;
 
-        using (MmcssScope multimedia = MmcssScope.Enter())
+        // FTZ/DAZ antes del primer bloque: los desvanecimientos de volumen y las colas del
+        // remuestreador producen denormales con naturalidad, y cada una cuesta cerca de
+        // cien ciclos en microcodigo. Con los bits puestos, el hardware las flusha en un
+        // ciclo. Se restaura al salir para no contaminar al resto del proceso.
+        uint savedControlWord = Kernel32.EnableFtzDaz();
+
+        try
         {
-            Statistics.UsingMultimediaClass = multimedia.IsActive;
-
-            while (!_stopRequested.Wait(0))
+            using (MmcssScope multimedia = MmcssScope.Enter())
             {
-                // El plazo es una red de seguridad: si el driver deja de senalizar, el bucle
-                // vuelve a comprobar la parada en lugar de quedarse colgado para siempre.
-                if (!_bufferReady.Wait(1000))
-                {
-                    Statistics.WaitTimeouts++;
-                    continue;
-                }
+                Statistics.UsingMultimediaClass = multimedia.IsActive;
 
-                try
+                while (!_stopRequested.Wait(0))
                 {
-                    FillBuffer();
-                }
-                catch (COMException exception) when (IsHResult(exception, HRESULT.AUDCLNT_E_DEVICE_INVALIDATED))
-                {
-                    Statistics.DeviceInvalidated = true;
-                    break;
+                    // El plazo es una red de seguridad: si el driver deja de senalizar, el
+                    // bucle vuelve a comprobar la parada en lugar de quedarse colgado.
+                    if (!_bufferReady.Wait(1000))
+                    {
+                        Statistics.WaitTimeouts++;
+                        continue;
+                    }
+
+                    try
+                    {
+                        FillBuffer();
+                    }
+                    catch (COMException exception) when (IsHResult(exception, HRESULT.AUDCLNT_E_DEVICE_INVALIDATED))
+                    {
+                        Statistics.DeviceInvalidated = true;
+                        break;
+                    }
                 }
             }
         }
+        finally
+        {
+            // Solo se desinicializa lo que este hilo inicializo: es exactamente el mismo
+            // criterio que aplica EnterApartment para el hilo de apertura.
+            if (ownsApartment)
+            {
+                PInvoke.CoUninitialize();
+            }
 
-        PInvoke.CoUninitialize();
+            Kernel32.RestoreControlWord(savedControlWord);
+        }
     }
 
     private void FillBuffer()
@@ -744,7 +809,23 @@ internal sealed unsafe class WasapiExclusiveOutput : IDisposable
             {
                 Span<float> scratch = _scratch.Span[..samples];
                 _provider.Render(scratch, _format.Channels);
-                SampleConverter.Clamp(scratch, scratch);
+
+                if (_provider is PlaybackPipeline { IsBitPerfectPassthrough: true } pipeline
+                    && pipeline.Volume == 1.0)
+                {
+                    // Modo transparente: la fuente ya viaja sin alteracion y el volumen
+                    // esta a la unidad. Ni limitador ni recorte: tocar la muestra aqui
+                    // romperia la garantia bit a bit que el estado declara. Con volumen
+                    // distinto de uno la rampa de ganancia altera las muestras y el
+                    // limitador vuelve a aplicar.
+                }
+                else
+                {
+                    // Limitador de rodilla suave en lugar de recorte duro: los picos entre
+                    // muestras se comprimen con tangente hiperbolica por encima de -0.1
+                    // dBFS y el resto de la senal pasa intacta.
+                    SampleConverter.SoftLimit(scratch, scratch);
+                }
 
                 int bytes = SampleConverter.BytesFor(samples, _format.Encoding);
                 SampleConverter.FromClampedFloat(scratch, new Span<byte>(destination, bytes), _format.Encoding);

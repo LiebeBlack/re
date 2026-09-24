@@ -1,0 +1,90 @@
+<Window
+    x:Class="Hidra.Shell.DiagnosticsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        Panel de diagnostico en vivo. Muestra los contadores que el motor ya publica y la
+        traza de la negociacion: es la informacion que distingue 'el dispositivo rechazo
+        el formato' de 'no hay dispositivo', sin necesidad de depurar.
+    -->
+    <ScrollViewer>
+        <StackPanel Padding="24" Spacing="14">
+
+            <TextBlock
+                Text="Diagnostico del motor"
+                FontSize="20"
+                FontWeight="SemiBold"
+                Foreground="#FFF1F6F4" />
+
+            <Border
+                Padding="18,16"
+                CornerRadius="12"
+                Background="#FF0A0E0D"
+                BorderThickness="1"
+                BorderBrush="#FF1E2B28">
+                <Grid ColumnSpacing="16" RowSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="REGIMEN" FontSize="10" FontWeight="SemiBold" Foreground="#FF7E938E" />
+                    <TextBlock x:Name="ModeValue" Grid.Row="0" Grid.Column="1" Text="—" FontSize="12" FontFamily="Consolas" Foreground="#FFF1F6F4" />
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="FORMATO" FontSize="10" FontWeight="SemiBold" Foreground="#FF7E938E" />
+                    <TextBlock x:Name="FormatValue" Grid.Row="1" Grid.Column="1" Text="—" FontSize="12" FontFamily="Consolas" Foreground="#FFF1F6F4" />
+
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="BUFFER" FontSize="10" FontWeight="SemiBold" Foreground="#FF7E938E" />
+                    <TextBlock x:Name="BufferValue" Grid.Row="2" Grid.Column="1" Text="—" FontSize="12" FontFamily="Consolas" Foreground="#FFF1F6F4" />
+
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="MULTIMEDIA" FontSize="10" FontWeight="SemiBold" Foreground="#FF7E938E" />
+                    <TextBlock x:Name="MmcssValue" Grid.Row="3" Grid.Column="1" Text="—" FontSize="12" FontFamily="Consolas" Foreground="#FFF1F6F4" />
+
+                    <TextBlock Grid.Row="4" Grid.Column="0" Text="CALLBACKS" FontSize="10" FontWeight="SemiBold" Foreground="#FF7E938E" />
+                    <TextBlock x:Name="CallbacksValue" Grid.Row="4" Grid.Column="1" Text="—" FontSize="12" FontFamily="Consolas" Foreground="#FFF1F6F4" />
+
+                    <TextBlock Grid.Row="5" Grid.Column="0" Text="ESPERAS AGOTADAS" FontSize="10" FontWeight="SemiBold" Foreground="#FF7E938E" />
+                    <TextBlock x:Name="TimeoutsValue" Grid.Row="5" Grid.Column="1" Text="—" FontSize="12" FontFamily="Consolas" Foreground="#FFF1F6F4" />
+
+                    <TextBlock Grid.Row="6" Grid.Column="0" Text="SILENCIO INSERTADO" FontSize="10" FontWeight="SemiBold" Foreground="#FF7E938E" />
+                    <TextBlock x:Name="UnderrunValue" Grid.Row="6" Grid.Column="1" Text="—" FontSize="12" FontFamily="Consolas" Foreground="#FFF1F6F4" />
+
+                    <TextBlock Grid.Row="7" Grid.Column="0" Text="FALLO DE CODIFICACION" FontSize="10" FontWeight="SemiBold" Foreground="#FF7E938E" />
+                    <TextBlock x:Name="DecoderErrorValue" Grid.Row="7" Grid.Column="1" Text="ninguno" FontSize="12" FontFamily="Consolas" TextWrapping="Wrap" Foreground="#FFF2506E" />
+                </Grid>
+            </Border>
+
+            <TextBlock
+                Text="TRAZA DE NEGOCIACION"
+                FontSize="10"
+                FontWeight="SemiBold"
+                Foreground="#FF7E938E" />
+
+            <Border
+                Padding="18,14"
+                CornerRadius="12"
+                Background="#FF121917"
+                BorderThickness="1"
+                BorderBrush="#FF1E2B28">
+                <TextBlock
+                    x:Name="NegotiationText"
+                    FontFamily="Consolas"
+                    FontSize="11"
+                    LineHeight="18"
+                    TextWrapping="Wrap"
+                    Foreground="#FFF1F6F4" />
+            </Border>
+        </StackPanel>
+    </ScrollViewer>
+</Window>

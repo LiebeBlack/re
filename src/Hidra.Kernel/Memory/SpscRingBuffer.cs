@@ -42,6 +42,11 @@ internal sealed unsafe class SpscRingBuffer<T> : IDisposable
     public int Capacity => _buffer.Length;
 
     /// <summary>Elementos listos para leer.</summary>
+    /// <remarks>
+    /// Bajo un <see cref="Reset"/> concurrente los indices pueden cruzarse por una ventana
+    /// y la resta sale negativa. Un recuento negativo no significa nada: se devuelve cero
+    /// en lugar de propagar un valor que quien llama interpretaria como datos disponibles.
+    /// </remarks>
     public int Count
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -49,11 +54,17 @@ internal sealed unsafe class SpscRingBuffer<T> : IDisposable
         {
             long head = Volatile.Read(ref _head);
             long tail = Volatile.Read(ref _tail);
-            return (int)(tail - head);
+            long count = tail - head;
+            return count > 0 ? (int)Math.Min(count, _buffer.Length) : 0;
         }
     }
 
     /// <summary>Huecos libres para escribir.</summary>
+    /// <remarks>
+    /// Mismo tratamiento que <see cref="Count"/>: tras un reinicio concurrente el hueco
+    /// declarado puede superar la capacidad, y confiar en el haria que el productor
+    /// escribiese mas alla de lo que la cola puede sostener.
+    /// </remarks>
     public int Free
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -61,7 +72,8 @@ internal sealed unsafe class SpscRingBuffer<T> : IDisposable
         {
             long head = Volatile.Read(ref _head);
             long tail = Volatile.Read(ref _tail);
-            return _buffer.Length - (int)(tail - head);
+            long free = (long)_buffer.Length - (tail - head);
+            return free > 0 ? (int)Math.Min(free, _buffer.Length) : 0;
         }
     }
 
@@ -80,9 +92,15 @@ internal sealed unsafe class SpscRingBuffer<T> : IDisposable
 
         long tail = _tail;
         long head = Volatile.Read(ref _head);
-        int free = _buffer.Length - (int)(tail - head);
-        int count = Math.Min(free, source.Length);
-        if (count == 0)
+        long free = (long)_buffer.Length - (tail - head);
+
+        // El mismo cuidado que en Read: un Reset concurrente (descargar un archivo mientras
+        // el hilo de audio esta en pleno callback, o vaciar la cola al buscar) puede dejar
+        // el hueco declarado por encima de la capacidad durante una ventana. Recortar al
+        // tamano del arreglo mantiene la copia dentro de la memoria reservada incluso en
+        // ese caso, a costa de perder el bloque, que es lo que ya haria una cola llena.
+        int count = (int)Math.Min(Math.Min(free, (long)source.Length), (long)_buffer.Length);
+        if (count <= 0)
         {
             return 0;
         }
@@ -126,10 +144,21 @@ internal sealed unsafe class SpscRingBuffer<T> : IDisposable
             return 0;
         }
 
-        long head = _head;
+        long head = Volatile.Read(ref _head);
         long tail = Volatile.Read(ref _tail);
-        int available = (int)(tail - head);
-        int count = Math.Min(available, destination.Length);
+        long available = tail - head;
+
+        // Bajo un Reset concurrente los indices pueden cruzarse por una ventana y la resta
+        // sale negativa, o el recuento declarado supera la capacidad. Ninguno de los dos
+        // estados puede interpretarse: se ignora la lectura y ya se recoge en la vuelta
+        // siguiente, cuando los indices vuelvan a ser coherentes. Es lo que mantiene la
+        // cola segura aunque el llamante reinicie con un consumidor a medio callback.
+        if (available <= 0)
+        {
+            return 0;
+        }
+
+        int count = (int)Math.Min(available, (long)destination.Length);
         if (count == 0)
         {
             return 0;
@@ -161,7 +190,12 @@ internal sealed unsafe class SpscRingBuffer<T> : IDisposable
         return count;
     }
 
-    /// <summary>Vacia la cola. Solo puede llamarse con ambos hilos detenidos.</summary>
+    /// <summary>
+    /// Vacia la cola. El contrato estricto es llamarla con ambos hilos detenidos; si un
+    /// consumidor o productor esta a medio operacion, las guardas de <see cref="Read"/> y
+    /// <see cref="Write"/> reconocen el estado transitorio y devuelven cero en lugar de
+    /// copiar con indices sin sentido.
+    /// </summary>
     public void Reset()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

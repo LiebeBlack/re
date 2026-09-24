@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
+using System.Runtime.Intrinsics.X86;
 using Hidra.Kernel.Memory;
 
 namespace Hidra.Kernel.Dsp;
@@ -141,7 +142,21 @@ internal sealed unsafe class FftKernel : IDisposable
             for (int stage = 0; stage < _logSize; stage++)
             {
                 int half = 1 << stage;
-                if (vectorized && half >= Vector128<float>.Count)
+
+                // La eleccion se hace UNA vez por etapa, no por mariposa: el coste del
+                // despacho es log2(n) comparaciones frente a n/2 * log2(n) mariposas.
+                if (vectorized && UseWideStages(half))
+                {
+                    if (Vector512.IsHardwareAccelerated)
+                    {
+                        StageVector512(realPointer, imaginaryPointer, _size, half, _twiddleCos.TypedPointer, _twiddleSin.TypedPointer, _stageOffset[stage]);
+                    }
+                    else
+                    {
+                        StageVector256(realPointer, imaginaryPointer, _size, half, _twiddleCos.TypedPointer, _twiddleSin.TypedPointer, _stageOffset[stage]);
+                    }
+                }
+                else if (vectorized && half >= Vector128<float>.Count)
                 {
                     StageVector(realPointer, imaginaryPointer, _size, half, _twiddleCos.TypedPointer, _twiddleSin.TypedPointer, _stageOffset[stage]);
                 }
@@ -219,7 +234,19 @@ internal sealed unsafe class FftKernel : IDisposable
             for (int stage = 0; stage < _logSize - 1; stage++)
             {
                 int half = 1 << stage;
-                if (half >= Vector128<float>.Count)
+
+                if (UseWideStages(half))
+                {
+                    if (Vector512.IsHardwareAccelerated)
+                    {
+                        StageVector512(realPointer, imaginaryPointer, length, half, _twiddleCos.TypedPointer, _twiddleSin.TypedPointer, _stageOffset[stage]);
+                    }
+                    else
+                    {
+                        StageVector256(realPointer, imaginaryPointer, length, half, _twiddleCos.TypedPointer, _twiddleSin.TypedPointer, _stageOffset[stage]);
+                    }
+                }
+                else if (half >= Vector128<float>.Count)
                 {
                     StageVector(realPointer, imaginaryPointer, length, half, _twiddleCos.TypedPointer, _twiddleSin.TypedPointer, _stageOffset[stage]);
                 }
@@ -281,6 +308,13 @@ internal sealed unsafe class FftKernel : IDisposable
         }
     }
 
+    /// <remarks>
+    /// Supresion de CA1517: la regla sugiere <c>ReadOnlySpan</c> para estos parametros, pero
+    /// la permutacion ESCRIBE en ellos (el intercambio de pares es una escritura a traves
+    /// del indexador). Es un falso positivo del analizador, que no sigue la referencia
+    /// devuelta por la deconstruccion de tuplas.
+    /// </remarks>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Quality", "CA1517", Justification = "Falso positivo: los parametros se escriben en la permutacion y ReadOnlySpan no admitiria la escritura.")]
     private static void Permute(Span<float> real, Span<float> imaginary, int length, int* bitReverse, int shift)
     {
         for (int i = 0; i < length; i++)
@@ -292,6 +326,35 @@ internal sealed unsafe class FftKernel : IDisposable
                 (imaginary[i], imaginary[j]) = (imaginary[j], imaginary[i]);
             }
         }
+    }
+
+    /// <summary>
+    /// True cuando la etapa admite el camino vectorial mas ancho disponible.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// El despacho va de mayor a menor ancho: 512 bits (AVX-512, 16 mariposas), 256 bits
+    /// (AVX2, 8) y 128 bits (SSE4.2/AdvSIMD, 4). Ninguna capacidad se asume: los flags
+    /// <c>IsHardwareAccelerated</c> los fija el JIT a partir del CPUID real del
+    /// procesador, de modo que el mismo binario toma la ruta mas ancha que el hardware
+    /// sostiene sin una sola rama en el bucle de mariposas.
+    /// </para>
+    /// <para>
+    /// El orden de las operaciones por carril es IDENTICO al del camino escalar
+    /// (multiplicar, restar, sumar, sin FMA y sin sumas horizontales), de modo que la
+    /// paridad bit a bit que verifica el arnes se conserva entre TODOS los caminos: el
+    /// ancho cambia cuantas muestras se procesan por instruccion, nunca como se combina
+    /// cada muestra.
+    /// </para>
+    /// </remarks>
+    private static bool UseWideStages(int half)
+    {
+        if (Vector512.IsHardwareAccelerated && half >= Vector512<float>.Count)
+        {
+            return true;
+        }
+
+        return Vector256.IsHardwareAccelerated && half >= Vector256<float>.Count;
     }
 
     /// <summary>Camino escalar. Tambien es la referencia de paridad del camino vectorial.</summary>
@@ -375,6 +438,149 @@ internal sealed unsafe class FftKernel : IDisposable
                 Vector128.Store<float>(Vector128.Add(lowImag, productImag), imaginary + low);
                 Vector128.Store<float>(Vector128.Subtract(lowReal, productReal), real + high);
                 Vector128.Store<float>(Vector128.Subtract(lowImag, productImag), imaginary + high);
+            }
+
+            for (; k < half; k++)
+            {
+                int low = start + k;
+                int high = low + half;
+
+                float wReal = twiddleCos[offset + k];
+                float wImag = twiddleSin[offset + k];
+                float highReal = real[high];
+                float highImag = imaginary[high];
+                float lowReal = real[low];
+                float lowImag = imaginary[low];
+
+                float productReal = (wReal * highReal) - (wImag * highImag);
+                float productImag = (wReal * highImag) + (wImag * highReal);
+
+                real[low] = lowReal + productReal;
+                imaginary[low] = lowImag + productImag;
+                real[high] = lowReal - productReal;
+                imaginary[high] = lowImag - productImag;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Camino de 256 bits: ocho mariposas por iteracion. Misma estructura, mismo orden de
+    /// operaciones y misma cola escalar que el camino de 128; cambia solo el ancho. Se
+    /// activa solo cuando <see cref="Vector256.IsHardwareAccelerated"/> es verdadero, de
+    /// modo que en un equipo SSE4.2 el JIT nunca toca estas instrucciones.
+    /// </summary>
+    private static void StageVector256(
+        float* real,
+        float* imaginary,
+        int length,
+        int half,
+        float* twiddleCos,
+        float* twiddleSin,
+        int offset)
+    {
+        int width = Vector256<float>.Count;
+        int block = half << 1;
+
+        for (int start = 0; start < length; start += block)
+        {
+            int k = 0;
+
+            for (; k + width <= half; k += width)
+            {
+                int low = start + k;
+                int high = low + half;
+
+                Vector256<float> wReal = Vector256.Load(twiddleCos + offset + k);
+                Vector256<float> wImag = Vector256.Load(twiddleSin + offset + k);
+                Vector256<float> highReal = Vector256.Load(real + high);
+                Vector256<float> highImag = Vector256.Load(imaginary + high);
+                Vector256<float> lowReal = Vector256.Load(real + low);
+                Vector256<float> lowImag = Vector256.Load(imaginary + low);
+
+                // Misma secuencia escalar por carril: multiplicar, restar, sumar. Sin FMA,
+                // sin sumas horizontales, sin reasociacion: paridad bit-exacta garantizada.
+                Vector256<float> productReal = Vector256.Subtract(
+                    Vector256.Multiply(wReal, highReal),
+                    Vector256.Multiply(wImag, highImag));
+
+                Vector256<float> productImag = Vector256.Add(
+                    Vector256.Multiply(wReal, highImag),
+                    Vector256.Multiply(wImag, highReal));
+
+                Vector256.Store(Vector256.Add(lowReal, productReal), real + low);
+                Vector256.Store(Vector256.Add(lowImag, productImag), imaginary + low);
+                Vector256.Store(Vector256.Subtract(lowReal, productReal), real + high);
+                Vector256.Store(Vector256.Subtract(lowImag, productImag), imaginary + high);
+            }
+
+            for (; k < half; k++)
+            {
+                int low = start + k;
+                int high = low + half;
+
+                float wReal = twiddleCos[offset + k];
+                float wImag = twiddleSin[offset + k];
+                float highReal = real[high];
+                float highImag = imaginary[high];
+                float lowReal = real[low];
+                float lowImag = imaginary[low];
+
+                float productReal = (wReal * highReal) - (wImag * highImag);
+                float productImag = (wReal * highImag) + (wImag * highReal);
+
+                real[low] = lowReal + productReal;
+                imaginary[low] = lowImag + productImag;
+                real[high] = lowReal - productReal;
+                imaginary[high] = lowImag - productImag;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Camino de 512 bits (AVX-512): dieciseis mariposas por iteracion. Misma secuencia
+    /// escalar por carril que el resto de caminos, de modo que la paridad bit a bit se
+    /// conserva. El JIT solo compila este cuerpo cuando el hardware declara AVX-512F.
+    /// </summary>
+    private static void StageVector512(
+        float* real,
+        float* imaginary,
+        int length,
+        int half,
+        float* twiddleCos,
+        float* twiddleSin,
+        int offset)
+    {
+        int width = Vector512<float>.Count;
+        int block = half << 1;
+
+        for (int start = 0; start < length; start += block)
+        {
+            int k = 0;
+
+            for (; k + width <= half; k += width)
+            {
+                int low = start + k;
+                int high = low + half;
+
+                Vector512<float> wReal = Vector512.Load(twiddleCos + offset + k);
+                Vector512<float> wImag = Vector512.Load(twiddleSin + offset + k);
+                Vector512<float> highReal = Vector512.Load(real + high);
+                Vector512<float> highImag = Vector512.Load(imaginary + high);
+                Vector512<float> lowReal = Vector512.Load(real + low);
+                Vector512<float> lowImag = Vector512.Load(imaginary + low);
+
+                Vector512<float> productReal = Vector512.Subtract(
+                    Vector512.Multiply(wReal, highReal),
+                    Vector512.Multiply(wImag, highImag));
+
+                Vector512<float> productImag = Vector512.Add(
+                    Vector512.Multiply(wReal, highImag),
+                    Vector512.Multiply(wImag, highReal));
+
+                Vector512.Store(Vector512.Add(lowReal, productReal), real + low);
+                Vector512.Store(Vector512.Add(lowImag, productImag), imaginary + low);
+                Vector512.Store(Vector512.Subtract(lowReal, productReal), real + high);
+                Vector512.Store(Vector512.Subtract(lowImag, productImag), imaginary + high);
             }
 
             for (; k < half; k++)

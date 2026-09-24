@@ -18,10 +18,90 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
+
+        <!--
+            Estados visuales. Deben declararse ANTES de cualquier hijo del Grid: el
+            compilador XAML trata la propiedad adjunta como asignacion del contenedor y
+            rechaza que llegue despues de la coleccion de Children. Por debajo de 760
+            pixeles efectivos el volumen estrecha su ancho y los margenes se compactan; no
+            hay una segunda interfaz, son los mismos elementos reajustados.
+        -->
+        <VisualStateManager.VisualStateGroups>
+            <VisualStateGroup>
+                <VisualState x:Name="WideLayout">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="760" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="VolumeSlider.Width" Value="160" />
+                        <Setter Target="VolumeText.Visibility" Value="Visible" />
+                    </VisualState.Setters>
+                </VisualState>
+
+                <VisualState x:Name="CompactLayout">
+                    <VisualState.StateTriggers>
+                        <AdaptiveTrigger MinWindowWidth="0" />
+                    </VisualState.StateTriggers>
+                    <VisualState.Setters>
+                        <Setter Target="VolumeSlider.Width" Value="96" />
+                        <Setter Target="VolumeText.Visibility" Value="Collapsed" />
+                        <Setter Target="DiagnosticsPanel.Margin" Value="12,10,12,12" />
+                        <Setter Target="TransportPanel.Margin" Value="12,10,12,0" />
+                        <Setter Target="HeaderPanel.Margin" Value="12,4,12,0" />
+                        <Setter Target="SpectrumBorder.Margin" Value="12,10,12,0" />
+                    </VisualState.Setters>
+                </VisualState>
+            </VisualStateGroup>
+        </VisualStateManager.VisualStateGroups>
+
+        <!--
+            Barra de menu. El contenido se extiende bajo la barra de titulo, de modo que la
+            barra toma el pulso de arrastre del sistema: los menus funcionan y la ventana
+            sigue arrastrandose desde el espacio vacio.
+        -->
+        <MenuBar
+            Grid.Row="1"
+            Margin="20,0,20,0"
+            Background="Transparent">
+
+            <MenuBarItem Title="Archivo">
+                <MenuFlyoutItem Text="Abrir archivo…" Click="OnOpenClicked">
+                    <MenuFlyoutItem.Icon>
+                        <FontIcon Glyph="&#xE8E5;" />
+                    </MenuFlyoutItem.Icon>
+                    <MenuFlyoutItem.KeyboardAccelerators>
+                        <KeyboardAccelerator Modifiers="Control" Key="O" />
+                    </MenuFlyoutItem.KeyboardAccelerators>
+                </MenuFlyoutItem>
+            </MenuBarItem>
+
+            <MenuBarItem Title="Motor">
+                <MenuFlyoutItem Text="Ajustes del motor…" Click="OnEngineSettingsClicked">
+                    <MenuFlyoutItem.Icon>
+                        <FontIcon Glyph="&#xE713;" />
+                    </MenuFlyoutItem.Icon>
+                </MenuFlyoutItem>
+
+                <MenuFlyoutItem Text="Diagnostico…" Click="OnDiagnosticsClicked">
+                    <MenuFlyoutItem.Icon>
+                        <FontIcon Glyph="&#xE9D9;" />
+                    </MenuFlyoutItem.Icon>
+                </MenuFlyoutItem>
+            </MenuBarItem>
+
+            <MenuBarItem Title="Ayuda">
+                <MenuFlyoutItem Text="Acerca de" Click="OnAboutClicked">
+                    <MenuFlyoutItem.Icon>
+                        <FontIcon Glyph="&#xE946;" />
+                    </MenuFlyoutItem.Icon>
+                </MenuFlyoutItem>
+            </MenuBarItem>
+        </MenuBar>
 
         <!--
             Barra de titulo propia. El contenido se extiende hasta el borde superior y la region
@@ -63,7 +143,8 @@
 
         <!-- Cabecera: que se esta reproduciendo y que formato tiene. -->
         <Border
-            Grid.Row="1"
+            x:Name="HeaderPanel"
+            Grid.Row="2"
             Margin="20,4,20,0"
             Padding="20,18"
             CornerRadius="14"
@@ -113,7 +194,8 @@
 
         <!-- Analizador de espectro. -->
         <Border
-            Grid.Row="2"
+            x:Name="SpectrumBorder"
+            Grid.Row="3"
             Margin="20,14,20,0"
             CornerRadius="14"
             Background="{StaticResource HidraSurface}"
@@ -135,7 +217,8 @@
 
         <!-- Transporte. -->
         <Grid
-            Grid.Row="3"
+            x:Name="TransportPanel"
+            Grid.Row="4"
             Margin="20,14,20,0"
             ColumnSpacing="20">
 
@@ -144,6 +227,14 @@
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
+
+            <Grid.Transitions>
+                <TransitionCollection>
+                    <!-- La reorganizacion del modo compacto se anima en lugar de saltar:
+                     el usuario sigue reconociendo donde esta cada control. -->
+                    <AddDeleteThemeTransition />
+                </TransitionCollection>
+            </Grid.Transitions>
 
             <StackPanel
                 Grid.Column="0"
@@ -263,7 +354,8 @@
             que suena distinto.
         -->
         <Border
-            Grid.Row="4"
+            x:Name="DiagnosticsPanel"
+            Grid.Row="5"
             Margin="20,14,20,20"
             Padding="16,12"
             CornerRadius="12"
@@ -305,7 +397,7 @@
         <InfoBar
             x:Name="StatusBar"
             Grid.Row="0"
-            Grid.RowSpan="5"
+            Grid.RowSpan="6"
             Margin="20,0,20,20"
             IsOpen="False"
             IsClosable="True"

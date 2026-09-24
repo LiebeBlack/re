@@ -10,6 +10,14 @@
       para que IsAotCompatible siga siendo una garantia, no una excepcion.
     -->
     <PublishAot>false</PublishAot>
+
+    <!--
+      RollForward SOLO aqui y no en la aplicacion: el arnes es una herramienta interna y
+      debe arrancar con cualquier runtime disponible (10 en CI, 11-rc en maquinas de
+      desarrollo que aun no lo tienen), mientras que la aplicacion publicada debe exigir
+      el runtime exacto para el que se probo.
+    -->
+    <RollForward>Major</RollForward>
   </PropertyGroup>
 
   <ItemGroup>

@@ -76,6 +76,9 @@ jobs:
             'Hidra.Shell.pri',
             'App.xbf',
             'MainWindow.xbf',
+            'EngineSettingsPage.xbf',
+            'DiagnosticsPage.xbf',
+            'AboutPage.xbf',
             'Hidra.Shell.deps.json',
             'Hidra.Shell.runtimeconfig.json'
           )

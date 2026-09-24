@@ -1,0 +1,153 @@
+<Window
+    x:Class="Hidra.Shell.EngineSettingsPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        Ventana secundaria de ajustes del motor. Comparte los recursos de aplicacion con la
+        ventana principal (misma App), pero se prefieren literales en los colores por la
+        misma razon que alla: una clave que no resuelva revienta en tiempo de ejecucion, y
+        aqui el coste de duplicar el color es cero.
+    -->
+    <ScrollViewer>
+        <StackPanel Padding="24" Spacing="14">
+
+            <TextBlock
+                Text="Ajustes del motor"
+                FontSize="20"
+                FontWeight="SemiBold"
+                Foreground="#FFF1F6F4" />
+
+            <TextBlock
+                Text="Los cambios reinician el motor de audio: la reproduccion se reanuda en la posicion actual y la cola se rellena de nuevo."
+                FontSize="12"
+                TextWrapping="Wrap"
+                Foreground="#FF7E938E" />
+
+            <Border
+                Padding="18,16"
+                CornerRadius="12"
+                Background="#FF0A0E0D"
+                BorderThickness="1"
+                BorderBrush="#FF1E2B28">
+                <StackPanel Spacing="12">
+
+                    <TextBlock
+                        Text="REGIMEN DEL DISPOSITIVO"
+                        FontSize="10"
+                        FontWeight="SemiBold"
+                        Foreground="#FF7E938E" />
+
+                    <RadioButton
+                        x:Name="ExclusiveRadio"
+                        GroupName="EngineMode"
+                        Content="Modo exclusivo (recomendado)"
+                        Checked="OnModeChecked"
+                        Foreground="#FFF1F6F4" />
+
+                    <TextBlock
+                        x:Name="ExclusiveHint"
+                        Margin="28,0,0,0"
+                        FontSize="11"
+                        TextWrapping="Wrap"
+                        Foreground="#FF7E938E" />
+
+                    <RadioButton
+                        x:Name="SharedRadio"
+                        GroupName="EngineMode"
+                        Content="Modo compartido"
+                        Checked="OnModeChecked"
+                        Foreground="#FFF1F6F4" />
+
+                    <TextBlock
+                        x:Name="SharedHint"
+                        Margin="28,0,0,0"
+                        FontSize="11"
+                        TextWrapping="Wrap"
+                        Foreground="#FF7E938E" />
+
+                    <TextBlock
+                        x:Name="ModeNotice"
+                        Margin="0,4,0,0"
+                        FontSize="11"
+                        TextWrapping="Wrap"
+                        Foreground="#FF3DDC97" />
+                </StackPanel>
+            </Border>
+
+            <Border
+                Padding="18,16"
+                CornerRadius="12"
+                Background="#FF0A0E0D"
+                BorderThickness="1"
+                BorderBrush="#FF1E2B28">
+                <StackPanel Spacing="10">
+
+                    <TextBlock
+                        Text="LATENCIA DE BUFFER"
+                        FontSize="10"
+                        FontWeight="SemiBold"
+                        Foreground="#FF7E938E" />
+
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+
+                        <Slider
+                            x:Name="LatencySlider"
+                            Grid.Column="0"
+                            Minimum="2"
+                            Maximum="200"
+                            Value="20"
+                            StepFrequency="1"
+                            SnapsTo="StepValues"
+                            ValueChanged="OnLatencyChanged"
+                            VerticalAlignment="Center" />
+
+                        <TextBlock
+                            x:Name="LatencyValueText"
+                            Grid.Column="1"
+                            Width="64"
+                            TextAlignment="Right"
+                            FontSize="13"
+                            FontFamily="Consolas"
+                            VerticalAlignment="Center"
+                            Foreground="#FFF1F6F4" />
+                    </Grid>
+
+                    <TextBlock
+                        FontSize="11"
+                        TextWrapping="Wrap"
+                        Foreground="#FF7E938E"
+                        Text="Menos milisegundos es menos espera entre lo que el motor entrega y lo que el DAC emite; por debajo del periodo del dispositivo el propio sistema realinea el buffer. Valores entre 10 y 30 ms son un buen termino medio." />
+                </StackPanel>
+            </Border>
+
+            <CheckBox
+                x:Name="FallbackCheck"
+                Content="Si el exclusivo no esta disponible, usar compartido en su lugar"
+                IsChecked="True"
+                Foreground="#FFF1F6F4" />
+
+            <StackPanel Orientation="Horizontal" Spacing="12" HorizontalAlignment="Right">
+                <Button
+                    x:Name="CancelButton"
+                    Content="Cancelar"
+                    Click="OnCancelClicked"
+                    Padding="18,8"
+                    CornerRadius="8" />
+
+                <Button
+                    x:Name="ApplyButton"
+                    Content="Aplicar y reiniciar motor"
+                    Click="OnApplyClicked"
+                    Padding="18,8"
+                    CornerRadius="8"
+                    Background="#FF3DDC97"
+                    Foreground="#FF04120C" />
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</Window>

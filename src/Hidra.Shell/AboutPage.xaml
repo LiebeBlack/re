@@ -1,0 +1,47 @@
+<Window
+    x:Class="Hidra.Shell.AboutPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        Ventana de identidad. La informacion de entorno se rellena en el constructor a
+        partir de propiedades estaticas del proceso: no hay nada que refrescar, porque
+        el hardware y el runtime no cambian durante la sesion.
+    -->
+    <StackPanel Padding="28" Spacing="16">
+
+        <StackPanel Orientation="Horizontal" Spacing="14">
+            <Border
+                Width="44"
+                Height="44"
+                CornerRadius="12"
+                Background="#FF3DDC97" />
+
+            <StackPanel Spacing="2" VerticalAlignment="Center">
+                <TextBlock Text="Hidra" FontSize="24" FontWeight="SemiBold" Foreground="#FFF1F6F4" />
+                <TextBlock x:Name="SubtitleText" Text="Reproductor de audio sobre WASAPI" FontSize="12" Foreground="#FF7E938E" />
+            </StackPanel>
+        </StackPanel>
+
+        <Border
+            Padding="18,14"
+            CornerRadius="12"
+            Background="#FF0A0E0D"
+            BorderThickness="1"
+            BorderBrush="#FF1E2B28">
+            <StackPanel Spacing="8">
+                <TextBlock Text="ENTORNO DE EJECUCION" FontSize="10" FontWeight="SemiBold" Foreground="#FF7E938E" />
+                <TextBlock x:Name="RuntimeText" FontSize="12" FontFamily="Consolas" TextWrapping="Wrap" Foreground="#FFF1F6F4" />
+                <TextBlock x:Name="SimdText" FontSize="12" FontFamily="Consolas" TextWrapping="Wrap" Foreground="#FFF1F6F4" />
+                <TextBlock x:Name="VectorText" FontSize="12" FontFamily="Consolas" TextWrapping="Wrap" Foreground="#FFF1F6F4" />
+                <TextBlock x:Name="DeviceText" FontSize="12" FontFamily="Consolas" TextWrapping="Wrap" Foreground="#FFF1F6F4" />
+            </StackPanel>
+        </Border>
+
+        <TextBlock
+            FontSize="11"
+            TextWrapping="Wrap"
+            Foreground="#FF7E938E"
+            Text="Cadena de senal propia: decodificacion con Media Foundation, remuestreo sinc-Kaiser, mezcla y salida WASAPI. El hilo de audio no reserva memoria: es la propiedad que el arnes de verificacion demuestra en cada ejecucion." />
+    </StackPanel>
+</Window>
