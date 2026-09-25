@@ -11,6 +11,12 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: true
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
 
+# Un push nuevo a la misma referencia cancela la compilacion anterior: nada de
+# valor se pierde y el runner queda libre para el commit que si importa.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     name: Verificacion
@@ -18,9 +24,9 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
 
@@ -44,9 +50,9 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
 
@@ -63,35 +69,11 @@ jobs:
       # La comprobacion no es cosmetica. El publicador de una aplicacion sin empaquetar omite
       # el marcado compilado y el indice de recursos, y el ejecutable resultante no arranca
       # sin decir por que. Se comprueba aqui porque en el equipo de desarrollo el sintoma se
-      # confunde con un problema del entorno.
+      # confunde con un problema del entorno. La lista vive en scripts/Test-PublishLayout.ps1,
+      # compartida con el workflow de release para que ambas no se desincronicen.
       - name: Comprobar que la publicacion esta completa
         shell: pwsh
-        run: |
-          $required = @(
-            'Hidra.Shell.exe',
-            'Hidra.Shell.dll',
-            'Hidra.Kernel.dll',
-            'Hidra.Audio.dll',
-            'Hidra.Interop.dll',
-            'Hidra.Shell.pri',
-            'App.xbf',
-            'MainWindow.xbf',
-            'EngineSettingsPage.xbf',
-            'DiagnosticsPage.xbf',
-            'AboutPage.xbf',
-            'Hidra.Shell.deps.json',
-            'Hidra.Shell.runtimeconfig.json'
-          )
-
-          $missing = $required | Where-Object { -not (Test-Path "artifacts/publish/$_") }
-          if ($missing) { throw "Faltan archivos en la publicacion: $($missing -join ', ')" }
-
-          $own = Get-ChildItem artifacts/publish -File |
-            Where-Object { $_.Name -like 'Hidra.*' } |
-            Measure-Object -Property Length -Sum
-
-          Write-Host ("Binarios propios: {0} archivos, {1:N0} KB" -f $own.Count, ($own.Sum / 1KB))
-          Write-Host ("Total publicado : {0} archivos" -f (Get-ChildItem artifacts/publish -File).Count)
+        run: scripts/Test-PublishLayout.ps1 -PublishDir artifacts/publish
 
       - uses: actions/upload-artifact@v4
         with:

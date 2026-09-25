@@ -4,7 +4,18 @@ name: release
 # Se dispara por:
 # 1. Finalizacion exitosa del workflow build en la rama main.
 # 2. Creacion de tags de version (v*).
-# 3. Ejecucion manual desde la interfaz de GitHub Actions (workflow_dispatch).
+# 3. Ejecucion manual desde la interfaz de GitHub Actions (workflow_dispatch),
+#    opcionalmente indicando la version (X.Y.Z o X.Y.Z-prerelease).
+#
+# Notas de diseno:
+# - El checkout SIEMPRE apunta al commit exacto del que provienen los binarios
+#   (head_sha del build en eventos workflow_run), de modo que hidra.iss y el
+#   artefacto descargado correspondan al mismo arbol de fuentes.
+# - La creacion de releases se SERIALIZA con concurrency: dos disparos casi
+#   simultaneos (un push de tag y un build que termina) no compiten por el
+#   mismo release; el segundo espera y publica despues.
+# - El instalador se sube ademas como artefacto del workflow: aunque la
+#   publicacion del release falle, el binario queda recuperable.
 on:
   workflow_run:
     workflows: [build]
@@ -16,13 +27,18 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version de release (ej: 1.0.0 o v1.0.0, opcional)'
+        description: 'Version de release (ej: 1.0.0 o v1.0.0; vacio = compilacion de desarrollo)'
         required: false
         default: ''
 
 permissions:
   contents: write
   actions: read
+
+# Sin cancel-in-progress: los disparos en cola se publican en orden, nunca se
+# abandona un release a mitad de publicacion.
+concurrency:
+  group: release
 
 env:
   DOTNET_NOLOGO: true
@@ -38,43 +54,71 @@ jobs:
     if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
 
     steps:
+      # ---------------------------------------------------------------------
+      #  Version y commit de origen
+      # ---------------------------------------------------------------------
+      # Los contextos de GitHub se pasan por entorno, nunca interpolados en el
+      # guion: un valor con comillas o caracteres especiales no puede inyectar
+      # comandos en el shell.
       - name: Identificar version y commit de origen
         id: meta
         shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          DISPATCH_VERSION: ${{ inputs.version }}
         run: |
-          $event = '${{ github.event_name }}'
-          $sha = if ($event -eq 'workflow_run' -and '${{ github.event.workflow_run.head_sha }}') {
-            '${{ github.event.workflow_run.head_sha }}'
+          $ErrorActionPreference = 'Stop'
+
+          $sha = if ($env:EVENT_NAME -eq 'workflow_run' -and $env:HEAD_SHA) {
+            $env:HEAD_SHA
           } else {
-            '${{ github.sha }}'
+            $env:GITHUB_SHA
           }
-          $shortSha = if ($sha.Length -ge 7) { $sha.Substring(0, 7) } else { $sha }
+          $shortSha = $sha.Substring(0, [Math]::Min(7, $sha.Length))
 
           $tag = ''
           $version = ''
-          if ($event -eq 'push' -and '${{ github.ref_type }}' -eq 'tag') {
-            $tag = '${{ github.ref_name }}'
+
+          if ($env:EVENT_NAME -eq 'push' -and $env:REF_TYPE -eq 'tag') {
+            $tag = $env:REF_NAME
             $version = $tag -replace '^v', ''
-          } elseif ($event -eq 'workflow_dispatch' -and (-not [string]::IsNullOrWhiteSpace('${{ inputs.version }}'))) {
-            $raw = '${{ inputs.version }}'.Trim()
-            $version = $raw -replace '^v', ''
+          }
+          elseif ($env:EVENT_NAME -eq 'workflow_dispatch' -and -not [string]::IsNullOrWhiteSpace($env:DISPATCH_VERSION)) {
+            $version = $env:DISPATCH_VERSION.Trim() -replace '^v', ''
+            if ($version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+              throw "Version invalida '$version'. Formato esperado: X.Y.Z o X.Y.Z-sufijo (ej: 1.0.0, 1.0.0-beta.1)."
+            }
             $tag = "v$version"
-          } else {
+          }
+          else {
             $tag = "v0.0.0-$shortSha"
             $version = "dev-$shortSha"
           }
+
+          # Prerelease cuando el versionado lleva sufijo (semver) o es una
+          # compilacion de desarrollo sin etiqueta.
+          $isPrerelease = $version -match '-'
 
           "SHA=$sha" >> $env:GITHUB_ENV
           "SHORT_SHA=$shortSha" >> $env:GITHUB_ENV
           "RELEASE_TAG=$tag" >> $env:GITHUB_ENV
           "APP_VERSION=$version" >> $env:GITHUB_ENV
+          "IS_PRERELEASE=$(if ($isPrerelease) { 'true' } else { 'false' })" >> $env:GITHUB_ENV
 
-          Write-Host "Evento       : $event"
+          Write-Host "Evento       : $($env:EVENT_NAME)"
           Write-Host "Commit SHA   : $sha ($shortSha)"
           Write-Host "Release Tag  : $tag"
           Write-Host "App Version  : $version"
+          Write-Host "Prerelease   : $isPrerelease"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.SHA }}
+          # El release nunca empuja nada: sin credenciales persistentes en git.
+          persist-credentials: false
 
       - name: Descargar artefacto verificado si existe
         if: ${{ github.event_name == 'workflow_run' }}
@@ -87,54 +131,40 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Configurar .NET SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
 
+      # ---------------------------------------------------------------------
+      #  Publicacion de los binarios
+      # ---------------------------------------------------------------------
+      # El artefacto descargado del build tiene prioridad; solo si falta algo
+      # se recompila aqui. La lista de archivos imprescindibles y el resumen de
+      # tamano viven en scripts/Test-PublishLayout.ps1, compartida con build.yml.
       - name: Asegurar publicacion de binarios del producto
         shell: pwsh
         run: |
-          $required = @(
-            'Hidra.Shell.exe',
-            'Hidra.Shell.dll',
-            'Hidra.Kernel.dll',
-            'Hidra.Audio.dll',
-            'Hidra.Interop.dll',
-            'Hidra.Shell.pri',
-            'App.xbf',
-            'MainWindow.xbf',
-            'EngineSettingsPage.xbf',
-            'DiagnosticsPage.xbf',
-            'AboutPage.xbf',
-            'Hidra.Shell.deps.json',
-            'Hidra.Shell.runtimeconfig.json'
-          )
-
-          $allPresent = $true
-          foreach ($f in $required) {
-            if (-not (Test-Path "artifacts/publish/$f")) {
-              $allPresent = $false
-              break
-            }
+          $publishComplete = $true
+          try {
+            & scripts/Test-PublishLayout.ps1 -PublishDir 'artifacts/publish' -ErrorAction Stop
+          }
+          catch {
+            $publishComplete = $false
+            Write-Host "Artefacto incompleto: $($_.Exception.Message)"
           }
 
-          if (-not $allPresent) {
-            Write-Host "Artefacto completo no detectado en cache. Compilando y publicando Hidra.Shell..."
+          if (-not $publishComplete) {
+            Write-Host 'Compilando y publicando Hidra.Shell en este runner...'
             dotnet publish src/Hidra.Shell/Hidra.Shell.csproj -c Release -o artifacts/publish
-          } else {
-            Write-Host "Artefacto verificado desde descarga previa de CI."
+            if ($LASTEXITCODE -ne 0) {
+              throw "dotnet publish fallo con codigo de salida $LASTEXITCODE"
+            }
+            & scripts/Test-PublishLayout.ps1 -PublishDir 'artifacts/publish'
           }
 
-          $missing = $required | Where-Object { -not (Test-Path "artifacts/publish/$_") }
-          if ($missing) {
-            throw "Faltan archivos esenciales en artifacts/publish: $($missing -join ', ')"
-          }
-
-          Write-Host ("Archivos listos para empaquetar: {0}" -f (Get-ChildItem artifacts/publish -File).Count)
-
-      # ==========================================================================
-      #  CERTIFICADO Y FIRMA AUTHENTICODE (Tolerante a fallos si faltan secrets)
-      # ==========================================================================
+      # ---------------------------------------------------------------------
+      #  Certificado y firma Authenticode (tolerante si faltan secrets)
+      # ---------------------------------------------------------------------
       - name: Configurar certificado para firma (si esta configurado)
         id: cert
         shell: pwsh
@@ -195,46 +225,40 @@ jobs:
             Write-Host "signtool: $signtool"
           }
 
+      # Todos los binarios se firman en UNA invocacion de signtool (acepta una
+      # lista de archivos): mismo resultado y mucho mas rapido que un proceso
+      # por DLL. Si el sellado de tiempo primario falla, se reintenta el lote
+      # completo contra el servidor alterno.
       - name: Firmar binarios del producto
         if: ${{ env.SIGNING_ENABLED == 'true' }}
         shell: pwsh
         run: |
-          $signtool = $env:SIGNTOOL
-          $subject = $env:CERT_SUBJECT
-
           $targets = Get-ChildItem 'artifacts/publish' -Recurse -File |
             Where-Object { $_.Extension -in '.exe', '.dll' } |
-            Sort-Object FullName
+            Sort-Object FullName |
+            Select-Object -ExpandProperty FullName
 
           if (-not $targets) {
             Write-Host "No se encontraron binarios ejecutables para firmar."
             return
           }
 
-          Write-Host "Firmando $($targets.Count) binarios..."
-          foreach ($binary in $targets) {
-            Write-Host "  $($binary.Name)"
-            & $signtool sign `
-              /n $subject `
-              /fd SHA256 `
-              /tr http://timestamp.digicert.com `
-              /td SHA256 `
-              $binary.FullName 2>&1 | ForEach-Object { Write-Host "    $_" }
+          Write-Host "Firmando $($targets.Count) binarios:"
+          $targets | ForEach-Object { Write-Host "  - $(Split-Path $_ -Leaf)" }
 
-            if ($LASTEXITCODE -ne 0) {
-              Write-Warning "Fallo con digicert; reintentando con sectigo..."
-              & $signtool sign `
-                /n $subject `
-                /fd SHA256 `
-                /tr http://timestamp.sectigo.com `
-                /td SHA256 `
-                $binary.FullName 2>&1 | ForEach-Object { Write-Host "    $_" }
-            }
+          & $env:SIGNTOOL sign /n $env:CERT_SUBJECT /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 @targets
+          if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Fallo con digicert; reintentando el lote con sectigo..."
+            & $env:SIGNTOOL sign /n $env:CERT_SUBJECT /fd SHA256 /tr http://timestamp.sectigo.com /td SHA256 @targets
           }
 
-      # ==========================================================================
-      #  INSTALADOR INNO SETUP
-      # ==========================================================================
+          if ($LASTEXITCODE -ne 0) {
+            throw "signtool no pudo firmar los binarios (codigo $LASTEXITCODE)."
+          }
+
+      # ---------------------------------------------------------------------
+      #  Instalador Inno Setup
+      # ---------------------------------------------------------------------
       - name: Preparar Inno Setup
         shell: pwsh
         run: |
@@ -294,12 +318,11 @@ jobs:
         if: ${{ env.SIGNING_ENABLED == 'true' }}
         shell: pwsh
         run: |
-          $signtool = $env:SIGNTOOL
           $installer = Get-ChildItem 'installer' -Recurse -Filter 'Hidra-*-setup-x64.exe' | Select-Object -First 1
           if (-not $installer) { throw "No se encontro el instalador para firmar." }
 
           Write-Host "Firmando instalador: $($installer.Name)"
-          & $signtool sign `
+          & $env:SIGNTOOL sign `
             /n $env:CERT_SUBJECT `
             /fd SHA256 `
             /tr http://timestamp.digicert.com `
@@ -308,18 +331,19 @@ jobs:
 
           if ($LASTEXITCODE -ne 0) {
             Write-Warning "Fallo con digicert; reintentando con sectigo..."
-            & $signtool sign `
+            & $env:SIGNTOOL sign `
               /n $env:CERT_SUBJECT `
               /fd SHA256 `
               /tr http://timestamp.sectigo.com `
               /td SHA256 `
-              $installer.FullName 2>&1 | ForEach-Object { Write-Host "    $_" }
+              $installer.FullName 2>&1 | ForEach-Object { Write-Host "  $_" }
           }
 
-          & $signtool verify /pa /all /q $installer.FullName
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "Firma del instalador verificada exitosamente."
+          & $env:SIGNTOOL verify /pa /all /q $installer.FullName
+          if ($LASTEXITCODE -ne 0) {
+            throw "La firma del instalador no supero la verificacion (codigo $LASTEXITCODE)."
           }
+          Write-Host "Firma del instalador verificada exitosamente."
 
       - name: Preparar assets y generar checksum SHA256
         shell: pwsh
@@ -340,9 +364,143 @@ jobs:
           Write-Host "Asset listo: $($installer.Name)"
           Write-Host "Checksum  : $hash"
 
-      # ==========================================================================
-      #  LIMPIEZA DE CERTIFICADOS
-      # ==========================================================================
+      # El binario queda en el almacen de artefactos del workflow aunque la
+      # publicacion del release falle mas adelante.
+      - name: Subir el instalador como artefacto del workflow
+        uses: actions/upload-artifact@v4
+        with:
+          name: hidra-installer-${{ env.RELEASE_TAG }}
+          path: |
+            ${{ env.INSTALLER_NAME }}
+            ${{ env.INSTALLER_NAME }}.sha256
+          if-no-files-found: error
+
+      # ---------------------------------------------------------------------
+      #  Publicacion en GitHub Releases
+      # ---------------------------------------------------------------------
+      - name: Redactar notas del release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SERVER_URL: ${{ github.server_url }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          $sha = $env:SHORT_SHA
+          $version = $env:APP_VERSION
+          $tag = $env:RELEASE_TAG
+          $installerName = $env:INSTALLER_NAME
+          $hash = $env:INSTALLER_HASH
+          $signingText = if ($env:SIGNING_ENABLED -eq 'true') { "Firmado digitalmente con Authenticode (RFC 3161)" } else { "Compilacion oficial verificada" }
+
+          $commitUrl = "$($env:SERVER_URL)/$($env:REPOSITORY)/commit/$($env:SHA)"
+          $runUrl = "$($env:SERVER_URL)/$($env:REPOSITORY)/actions/runs/$($env:RUN_ID)"
+
+          # Cambios desde el release anterior: comparacion en el servidor contra
+          # el ultimo tag publicado. Es informativo; si falla, las notas salen sin la seccion.
+          $changesBlock = ''
+          try {
+            $releases = gh release list --limit 50 --json tagName | ConvertFrom-Json
+            $prevTag = $releases |
+              Where-Object { $_.tagName -ne $tag } |
+              Select-Object -First 1 -ExpandProperty tagName
+
+            if ($prevTag) {
+              $subjects = gh api "repos/$env:GITHUB_REPOSITORY/compare/$prevTag...$env:SHA" `
+                --jq '.commits[].commit.message | split("\n")[0]' 2>$null
+              if ($LASTEXITCODE -eq 0 -and $subjects) {
+                # Dos etapas: Unique sobre todo el conjunto, First despues; en una
+                # sola llamada el orden de aplicacion no esta garantizado.
+                $unique = @($subjects | Where-Object { $_ } | Select-Object -Unique)
+                $lines = @($unique | Select-Object -First 20 |
+                  ForEach-Object { "- $_" }) -join "`n"
+                if ($lines) {
+                  $changesBlock = "`n### Cambios desde $prevTag`n$lines`n"
+                }
+              }
+            }
+          }
+          catch {
+            Write-Host "No se pudieron listar cambios previos: $($_.Exception.Message)"
+          }
+
+          # Plantilla de una sola pieza con tokens: evita mezclar interpolacion
+          # de PowerShell con el markdown (los backticks de las vallas de codigo
+          # son caracteres de escape del here-string doble y corrompen el texto).
+          $template = @'
+          ## Hidra {VERSION}
+
+          Compilacion automatica basada en el commit [{SHA}]({COMMIT_URL}).
+
+          ### Instalador Oficial
+          - **Archivo**: `{ASSET}`
+          - **Seguridad**: {SIGNING}
+          - **Ejecucion de CI**: [Detalles del flujo]({RUN_URL})
+
+          ### Verificacion de Integridad SHA256
+          ```powershell
+          Get-FileHash {ASSET} -Algorithm SHA256
+          # {HASH}
+          ```
+          {CHANGES}
+          ### Caracteristicas del Paquete
+          - Motor WASAPI en Modo Exclusivo de baja latencia con reproduccion bit-perfect.
+          - Despliegue optimizado para Windows 10 (1809+) y Windows 11 (x64).
+          - Asociacion moderna en el Explorador (`OpenWithProgids`) para formatos sin perdida y comprimidos (FLAC, WAV, MP3, M4A, AAC, ALAC, OGG, OPUS, AIFF, etc.).
+          - Deteccion de prerrequisitos del sistema (.NET 10 y Windows App SDK 1.7) y desinstalacion limpia.
+          '@
+
+          $notes = $template
+            .Replace('{VERSION}', $version)
+            .Replace('{SHA}', $sha)
+            .Replace('{COMMIT_URL}', $commitUrl)
+            .Replace('{ASSET}', $installerName)
+            .Replace('{SIGNING}', $signingText)
+            .Replace('{RUN_URL}', $runUrl)
+            .Replace('{HASH}', $hash)
+            .Replace('{CHANGES}', $changesBlock)
+
+          $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          $notes | Set-Content -Path $notesPath -Encoding utf8
+          Write-Host "Notas escritas en $notesPath"
+
+      # El tag se crea con --target para que apunte AL COMMIT DEL ARTEFACTO, no
+      # a la HEAD que el servidor elija por defecto en eventos sin tag propio.
+      - name: Publicar Release en GitHub
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:RELEASE_TAG
+          $title = "Hidra $env:APP_VERSION"
+          $installerPath = Join-Path (Get-Location) $env:INSTALLER_NAME
+          $hashPath = "$installerPath.sha256"
+          $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          $visibility = if ($env:IS_PRERELEASE -eq 'true') { '--prerelease' } else { '--latest' }
+
+          Write-Host "Comprobando release $tag..."
+          gh release view $tag 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "El release $tag ya existe. Actualizando notas y reemplazando archivos..."
+            gh release edit $tag --title $title --notes-file $notesPath $visibility
+            if ($LASTEXITCODE -ne 0) { throw "gh release edit fallo (codigo $LASTEXITCODE)" }
+            gh release upload $tag $installerPath $hashPath --clobber
+            if ($LASTEXITCODE -ne 0) { throw "gh release upload fallo (codigo $LASTEXITCODE)" }
+          } else {
+            Write-Host "Creando nuevo release $tag sobre el commit $($env:SHA)..."
+            gh release create $tag $installerPath $hashPath `
+              --target $env:SHA `
+              --title $title `
+              --notes-file $notesPath `
+              $visibility
+            if ($LASTEXITCODE -ne 0) { throw "gh release create fallo (codigo $LASTEXITCODE)" }
+          }
+          Write-Host "Release $tag publicado con exito."
+
+      # ---------------------------------------------------------------------
+      #  Limpieza y resumen (siempre, aunque lo anterior falle)
+      # ---------------------------------------------------------------------
       - name: Limpiar el certificado del almacen del runner
         if: always()
         shell: pwsh
@@ -374,70 +532,31 @@ jobs:
             }
           }
 
-      # ==========================================================================
-      #  PUBLICACION EN GITHUB RELEASES
-      # ==========================================================================
-      - name: Redactar notas del release
+      - name: Resumen del release
+        if: always()
         shell: pwsh
         run: |
-          $sha = $env:SHORT_SHA
-          $version = $env:APP_VERSION
-          $tag = $env:RELEASE_TAG
-          $installerName = $env:INSTALLER_NAME
-          $hash = $env:INSTALLER_HASH
-          $signingText = if ($env:SIGNING_ENABLED -eq 'true') { "Firmado digitalmente con Authenticode (RFC 3161)" } else { "Compilacion oficial verificada" }
+          $summary = @"
 
-          $commitUrl = "${{ github.server_url }}/${{ github.repository }}/commit/$($env:SHA)"
-          $runUrl = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          ## Resumen del release
 
-          $notes = @"
-## Hidra $version
+          | Campo    | Valor |
+          | -------- | ----- |
+          | Tag      | {TAG} |
+          | Version  | {VERSION} |
+          | Commit   | {SHORT_SHA} |
+          | Asset    | {ASSET} |
+          | SHA256   | {HASH} |
+          | Firma    | {SIGNING} |
+          "@
 
-Compilacion automatica basada en el commit [$sha]($commitUrl).
+          $signingText = if ($env:SIGNING_ENABLED -eq 'true') { 'Authenticode (RFC 3161)' } else { 'sin firma (secrets no configurados)' }
+          $text = $summary
+            .Replace('{TAG}', $env:RELEASE_TAG)
+            .Replace('{VERSION}', $env:APP_VERSION)
+            .Replace('{SHORT_SHA}', $env:SHORT_SHA)
+            .Replace('{ASSET}', $env:INSTALLER_NAME)
+            .Replace('{HASH}', $env:INSTALLER_HASH)
+            .Replace('{SIGNING}', $signingText)
 
-### Instalador Oficial
-- **Archivo**: `$installerName`
-- **Seguridad**: $signingText
-- **Ejecucion de CI**: [Detalles del flujo]($runUrl)
-
-### Verificacion de Integridad SHA256
-````powershell
-Get-FileHash $installerName -Algorithm SHA256
-# $hash
-````
-
-### Caracteristicas del Paquete
-- Motor WASAPI en Modo Exclusivo de baja latencia con reproduccion bit-perfect.
-- Despliegue optimizado para Windows 10 (1809+) y Windows 11 (x64).
-- Asociacion moderna en el Explorador (`OpenWithProgids`) para formatos sin perdida y comprimidos (FLAC, WAV, MP3, M4A, AAC, ALAC, OGG, OPUS, AIFF, etc.).
-- Deteccion de prerrequisitos del sistema (.NET 10 y Windows App SDK 1.7) y desinstalacion limpia.
-"@
-
-          $notes | Set-Content -Path release-notes.md -Encoding utf8
-
-      - name: Publicar Release en GitHub
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          $tag = $env:RELEASE_TAG
-          $title = "Hidra $env:APP_VERSION"
-          $installerName = $env:INSTALLER_NAME
-          $assets = @($installerName, "$installerName.sha256")
-
-          Write-Host "Comprobando release $tag..."
-          gh release view $tag 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            Write-Host "El release $tag ya existe. Actualizando notas y reemplazando archivos..."
-            gh release edit $tag --title $title --notes-file release-notes.md
-            gh release upload $tag @assets --clobber
-          } else {
-            Write-Host "Creando nuevo release $tag..."
-            $isPre = if ($tag -like '*-*' -or $tag -like '*dev*') { $true } else { $false }
-            if ($isPre) {
-              gh release create $tag @assets --title $title --notes-file release-notes.md --prerelease
-            } else {
-              gh release create $tag @assets --title $title --notes-file release-notes.md --latest
-            }
-          }
-          Write-Host "Release $tag publicado con exito."
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $text
