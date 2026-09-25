@@ -122,7 +122,7 @@ internal sealed unsafe class SpscRingBuffer<T> : IDisposable
                 Buffer.MemoryCopy(
                     sourcePointer + first,
                     destination,
-                    (long)index * sizeof(T),
+                    (long)_buffer.Length * sizeof(T),
                     (long)(count - first) * sizeof(T));
             }
         }

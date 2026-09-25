@@ -148,7 +148,7 @@ public sealed partial class MainWindow : Window, IDisposable
         uint dpi = NativeWindowMethods.GetDpiForWindow(handle);
         double scale = dpi / 96.0;
 
-        if (!NativeWindowMethods.TryGetWorkArea(out var area))
+        if (!NativeWindowMethods.TryGetWorkArea(out var area, handle))
         {
             AppWindow.Resize(new Windows.Graphics.SizeInt32(defaultWidth, defaultHeight));
             return;
@@ -352,6 +352,17 @@ public sealed partial class MainWindow : Window, IDisposable
         TimeSpan resumePosition = _pipeline.Position;
         string? path = _pipeline.SourcePath;
 
+        WasapiExclusiveOutput old = _output;
+        AudioStreamMode previousMode = (AudioStreamMode)_settings.EngineMode;
+        TimeSpan previousLatency = _targetLatency;
+        bool previousFallback = _settings.AllowSharedFallback;
+
+        // Liberar el motor anterior antes de abrir el nuevo: en modo exclusivo WASAPI
+        // rechaza una segunda apertura sobre el mismo endpoint con AUDCLNT_E_DEVICE_IN_USE,
+        // lo que forzaria una caida a compartido no deseada.
+        old.Dispose();
+        _output = null;
+
         WasapiExclusiveOutput? replacement = null;
 
         try
@@ -359,26 +370,26 @@ public sealed partial class MainWindow : Window, IDisposable
             replacement = WasapiExclusiveOutput.Open(_pipeline, latency, mode, allowSharedFallback);
             _pipeline.RestartEngine(replacement.Format.SampleRate, replacement.Format.Channels, resumePosition);
         }
-        catch (WasapiException exception)
+        catch (Exception exception) when (exception is WasapiException or NotSupportedException or COMException)
         {
             replacement?.Dispose();
-            ShowStatus($"El motor sigue con los ajustes anteriores: {exception.Message}", InfoBarSeverity.Warning);
-            return;
-        }
-        catch (NotSupportedException exception)
-        {
-            replacement?.Dispose();
-            ShowStatus($"El motor sigue con los ajustes anteriores: {exception.Message}", InfoBarSeverity.Warning);
-            return;
-        }
-        catch (COMException exception)
-        {
-            replacement?.Dispose();
-            ShowStatus($"El motor sigue con los ajustes anteriores: {exception.Message}", InfoBarSeverity.Warning);
+
+            // Si los nuevos ajustes fallan en el hardware, restaurar la configuracion anterior.
+            try
+            {
+                replacement = WasapiExclusiveOutput.Open(_pipeline, previousLatency, previousMode, previousFallback);
+                _pipeline.RestartEngine(replacement.Format.SampleRate, replacement.Format.Channels, resumePosition);
+                _output = replacement;
+                ShowStatus($"El motor no admitio los nuevos ajustes ({exception.Message}); se restauraron los anteriores.", InfoBarSeverity.Warning);
+            }
+            catch (Exception restoreException)
+            {
+                ReportEngineFailure($"Fallo al restaurar el motor de audio: {restoreException.Message}");
+                return;
+            }
             return;
         }
 
-        WasapiExclusiveOutput old = _output;
         _output = replacement;
         _targetLatency = latency;
 
@@ -387,6 +398,7 @@ public sealed partial class MainWindow : Window, IDisposable
         _settings.LatencyMilliseconds = latency.TotalMilliseconds;
         _settings.EngineMode = (int)mode;
         _settings.AllowSharedFallback = allowSharedFallback;
+        _settings.ResamplerQuality = (int)_pipeline.ResamplerQuality;
         _settings.Save();
 
         _analyzer?.Dispose();
@@ -396,8 +408,6 @@ public sealed partial class MainWindow : Window, IDisposable
         LatencyText.Text = string.Create(
             CultureInfo.InvariantCulture,
             $"{replacement.Statistics.BufferDurationMilliseconds:F1} ms / {replacement.BufferFrames} fotogramas");
-
-        old.Dispose();
 
         await Task.CompletedTask;
     }
@@ -425,6 +435,7 @@ public sealed partial class MainWindow : Window, IDisposable
                 _targetLatency,
                 (AudioStreamMode)_settings.EngineMode,
                 _settings.AllowSharedFallback);
+            _pipeline.ResamplerQuality = (SincResampler.ResamplerQuality)_settings.ResamplerQuality;
             _pipeline.Configure(_output.Format.SampleRate, _output.Format.Channels);
             _analyzer = new SpectrumAnalyzer(FftSize, _output.Format.SampleRate, BandCount);
 
@@ -619,11 +630,10 @@ public sealed partial class MainWindow : Window, IDisposable
         // busqueda hacia atras no lo hace retroceder.
         TimeSpan ring = _pipeline.Position;
 
-        if (_pendingSeekTicks >= 0 && Math.Abs(ring.Ticks - _pendingSeekTicks) <= 200_000)
+        if (_pendingSeekTicks >= 0 && !_pipeline.IsSeekPending)
         {
-            // La busqueda ya se aplico y el material nuevo entra en cola: el cursor vuelve a
-            // seguir el audio. El margen de veinte milisegundos tolera la granularidad del
-            // primer bloque convertido.
+            // La busqueda ya se aplico en el hilo decodificador y el material nuevo entra en
+            // cola: el cursor vuelve a seguir la posicion del audio de forma determinista.
             _pendingSeekTicks = -1;
         }
 
@@ -999,6 +1009,7 @@ public sealed partial class MainWindow : Window, IDisposable
 
         try
         {
+            _pipeline.ResamplerQuality = (SincResampler.ResamplerQuality)_settings.ResamplerQuality;
             _pipeline.Load(path);
             _analyzer?.Reset();
 

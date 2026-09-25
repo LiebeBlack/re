@@ -145,5 +145,11 @@ public sealed partial class DiagnosticsPage : Window, IDisposable
         {
             DecoderErrorValue.Text = decoderError;
         }
+
+        string negotiation = string.Join(Environment.NewLine, output.NegotiationLog);
+        if (NegotiationText.Text != negotiation)
+        {
+            NegotiationText.Text = negotiation;
+        }
     }
 }

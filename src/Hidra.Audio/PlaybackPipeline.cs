@@ -174,6 +174,9 @@ internal sealed class PlaybackPipeline : ISampleProvider, IDisposable
     /// <summary>Muestras disponibles en la cola.</summary>
     public int BufferedSamples => _ring.Count;
 
+    /// <summary>True mientras una peticion de busqueda este pendiente de ser aplicada por el decodificador.</summary>
+    public bool IsSeekPending => Volatile.Read(ref _seekVersion) != Volatile.Read(ref _executedSeekVersion);
+
     /// <summary>
     /// Posicion dentro del archivo del material entregado al dispositivo.
     /// </summary>
@@ -1008,10 +1011,34 @@ internal sealed class PlaybackPipeline : ISampleProvider, IDisposable
     {
         float target = Volatile.Read(ref _targetGain);
         float current = _currentGain;
-        int frames = destination.Length / channels;
 
+        // Bypass rapido si la ganancia es unitaria y estable: conserva el bit-perfecto
+        // sin tocar ninguna muestra y ahorra multiplicaciones en el hilo de audio.
+        if (current == 1.0f && target == 1.0f)
+        {
+            return;
+        }
+
+        // Si el volumen esta en silencio total, vaciar directo es mas rapido que multiplicar.
+        if (current == 0.0f && target == 0.0f)
+        {
+            destination.Clear();
+            return;
+        }
+
+        int frames = destination.Length / channels;
         if (frames == 0)
         {
+            return;
+        }
+
+        // Ganancia constante sin rampa activa.
+        if (current == target)
+        {
+            for (int i = 0; i < destination.Length; i++)
+            {
+                destination[i] *= target;
+            }
             return;
         }
 
@@ -1037,6 +1064,7 @@ internal sealed class PlaybackPipeline : ISampleProvider, IDisposable
     {
         int frames = destination.Length / channels;
         long write = _scopeWrite;
+        float invChannels = 1.0f / channels;
 
         for (int frame = 0; frame < frames; frame++)
         {
@@ -1048,7 +1076,7 @@ internal sealed class PlaybackPipeline : ISampleProvider, IDisposable
                 sum += destination[offset + channel];
             }
 
-            _scope[(int)(write & ScopeMask)] = sum / channels;
+            _scope[(int)(write & ScopeMask)] = sum * invChannels;
             write++;
         }
 

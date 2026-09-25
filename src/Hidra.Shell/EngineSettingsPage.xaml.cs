@@ -35,7 +35,6 @@ public sealed partial class EngineSettingsPage : Window, IDisposable
         Title = "Ajustes del motor";
         AppWindow.Resize(new Windows.Graphics.SizeInt32(520, 680));
 
-        RenderStatistics statistics = owner.Output!.Statistics;
         SettingsStore settings = owner.Settings;
 
         // La seleccion arranca de lo PERSISTIDO, no del estado del motor: si el usuario
@@ -45,6 +44,9 @@ public sealed partial class EngineSettingsPage : Window, IDisposable
         ExclusiveRadio.IsChecked = persistedMode == AudioStreamMode.Exclusive;
         SharedRadio.IsChecked = persistedMode == AudioStreamMode.Shared;
         FallbackCheck.IsChecked = settings.AllowSharedFallback;
+
+        ResamplerStandardRadio.IsChecked = settings.ResamplerQuality == 0;
+        ResamplerMaxRadio.IsChecked = settings.ResamplerQuality == 1;
 
         ExclusiveHint.Text = "Sin mezcla del sistema ni remuestreo: el motor negocia el formato nativo del DAC. Solo un flujo a la vez.";
         SharedHint.Text = "Pasa por el mezclador de Windows: convive con otros reproductores, con algo mas de camino hasta el hardware.";
@@ -113,6 +115,10 @@ public sealed partial class EngineSettingsPage : Window, IDisposable
             : AudioStreamMode.Shared;
         TimeSpan latency = TimeSpan.FromMilliseconds(LatencySlider.Value);
         bool fallback = FallbackCheck.IsChecked == true;
+
+        int resamplerQuality = ResamplerMaxRadio.IsChecked == true ? 1 : 0;
+        _owner.Settings.ResamplerQuality = resamplerQuality;
+        _owner.Pipeline.ResamplerQuality = (Kernel.Dsp.SincResampler.ResamplerQuality)resamplerQuality;
 
         ApplyButton.IsEnabled = false;
 

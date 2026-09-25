@@ -354,7 +354,10 @@ internal static class SampleConverter
 
         for (int i = 0; i < count; i++)
         {
-            target[i] = (int)Math.Round((double)source[i] * 2147483647.0, MidpointRounding.AwayFromZero);
+            target[i] = (int)Math.Clamp(
+                Math.Round((double)source[i] * 2147483647.0, MidpointRounding.AwayFromZero),
+                -2147483648.0,
+                2147483647.0);
         }
     }
 }

@@ -63,7 +63,7 @@ internal sealed class ToneProvider : ISampleProvider
             }
 
             _phase += _increment;
-            if (_phase >= TwoPi)
+            while (_phase >= TwoPi)
             {
                 _phase -= TwoPi;
             }

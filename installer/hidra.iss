@@ -57,7 +57,7 @@ MinVersion=10.0.17763
 ; declarado mas abajo.
 PrivilegesRequired=admin
 PrivilegesRequiredOverridesAllowed=dialog
-OutputDir=installer
+OutputDir=.
 OutputBaseFilename=Hidra-{#MyAppVersion}-setup-x64
 Compression=lzma2/max
 SolidCompression=yes

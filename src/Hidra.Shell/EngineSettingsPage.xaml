@@ -125,6 +125,48 @@
                 </StackPanel>
             </Border>
 
+            <Border
+                Padding="18,16"
+                CornerRadius="12"
+                Background="#FF0A0E0D"
+                BorderThickness="1"
+                BorderBrush="#FF1E2B28">
+                <StackPanel Spacing="10">
+
+                    <TextBlock
+                        Text="CALIDAD DE REMUESTREO"
+                        FontSize="10"
+                        FontWeight="SemiBold"
+                        Foreground="#FF7E938E" />
+
+                    <RadioButton
+                        x:Name="ResamplerStandardRadio"
+                        GroupName="ResamplerQuality"
+                        Content="Estandar (64 coeficientes, equilibrio recomendado)"
+                        Foreground="#FFF1F6F4" />
+
+                    <TextBlock
+                        Margin="28,0,0,0"
+                        FontSize="11"
+                        TextWrapping="Wrap"
+                        Foreground="#FF7E938E"
+                        Text="Ventana Kaiser beta 8.5. Respuesta de fase lineal con excelente eficiencia en CPU." />
+
+                    <RadioButton
+                        x:Name="ResamplerMaxRadio"
+                        GroupName="ResamplerQuality"
+                        Content="Maxima calidad (128 coeficientes sinc-Kaiser)"
+                        Foreground="#FFF1F6F4" />
+
+                    <TextBlock
+                        Margin="28,0,0,0"
+                        FontSize="11"
+                        TextWrapping="Wrap"
+                        Foreground="#FF7E938E"
+                        Text="Ventana Kaiser beta 10.5 con rechazo de aliasing superior a 120 dB." />
+                </StackPanel>
+            </Border>
+
             <CheckBox
                 x:Name="FallbackCheck"
                 Content="Si el exclusivo no esta disponible, usar compartido en su lugar"

@@ -54,6 +54,9 @@ internal sealed class SettingsStore
     /// <summary>True para degradar a compartido si el exclusivo es rechazado.</summary>
     public bool AllowSharedFallback { get; set; } = DefaultAllowSharedFallback;
 
+    /// <summary>Calidad del remuestreador. 0 = Estandar (64 taps), 1 = Maxima calidad (128 taps).</summary>
+    public int ResamplerQuality { get; set; } = 0;
+
     /// <summary>Colocacion recordada de la ventana principal, o null para centrar.</summary>
     public WindowPlacement? Placement { get; set; }
 
@@ -81,6 +84,14 @@ internal sealed class SettingsStore
                 ? loaded.EngineMode
                 : 0;
             loaded.LatencyMilliseconds = Math.Clamp(loaded.LatencyMilliseconds, 2.0, 200.0);
+            loaded.ResamplerQuality = loaded.ResamplerQuality is 0 or 1
+                ? loaded.ResamplerQuality
+                : 0;
+
+            if (loaded.Placement is not null && (loaded.Placement.Width <= 0 || loaded.Placement.Height <= 0))
+            {
+                loaded.Placement = null;
+            }
 
             return loaded;
         }
@@ -96,11 +107,12 @@ internal sealed class SettingsStore
     /// <summary>Escribe las preferencias de forma atomica.</summary>
     public void Save()
     {
+        string temporary = $"{FilePath}.tmp";
+
         try
         {
             Directory.CreateDirectory(DirectoryPath);
 
-            string temporary = $"{FilePath}.tmp";
             string json = JsonSerializer.Serialize(this, SerializerOptions);
 
             File.WriteAllText(temporary, json);
@@ -112,6 +124,17 @@ internal sealed class SettingsStore
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException)
         {
+            try
+            {
+                if (File.Exists(temporary))
+                {
+                    File.Delete(temporary);
+                }
+            }
+            catch
+            {
+                // Silencioso ante fallos secundarios de limpieza.
+            }
             // Sin permiso o con el disco lleno la sesion sigue: los ajustes simplemente no
             // se recordaron. Es preferible a tumbar el cierre de la ventana por esto.
         }

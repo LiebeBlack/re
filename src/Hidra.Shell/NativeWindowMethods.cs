@@ -11,6 +11,7 @@ namespace Hidra.Shell;
 internal static partial class NativeWindowMethods
 {
     private const uint SpiGetWorkArea = 0x0048;
+    private const uint MonitorDefaultToNearest = 2;
 
     /// <summary>Rectangulo Win32 en coordenadas fisicas de pantalla.</summary>
     [StructLayout(LayoutKind.Sequential)]
@@ -22,6 +23,15 @@ internal static partial class NativeWindowMethods
         public int Bottom;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct MONITORINFO
+    {
+        public uint cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+    }
+
     /// <summary>True cuando la ventana esta minimizada (iconica).</summary>
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -31,33 +41,46 @@ internal static partial class NativeWindowMethods
     [LibraryImport("user32.dll")]
     internal static partial uint GetDpiForWindow(nint hWnd);
 
+    [LibraryImport("user32.dll")]
+    private static partial nint MonitorFromWindow(nint hWnd, uint dwFlags);
+
+    [LibraryImport("user32.dll", EntryPoint = "GetMonitorInfoW", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool GetMonitorInfoW(nint hMonitor, ref MONITORINFO lpmi);
+
     [LibraryImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SystemParametersInfoW(uint action, uint param, ref RECT rect, uint initialization);
 
-    /// <summary>Area de trabajo del monitor primario, sin barra de tareas.</summary>
-    /// <remarks>
-    /// El parametro se inicializa a default antes de la llamada: el analizador de
-    /// asignacion definida no ve a traves del P/Invoke que la funcion nativa lo llena,
-    /// y sin eso CS0269 corta la compilacion.
-    /// </remarks>
-    internal static bool TryGetWorkArea(out RECT area)
+    /// <summary>Area de trabajo del monitor donde se ubica la ventana, o del primario si no se indica ventana.</summary>
+    internal static bool TryGetWorkArea(out RECT area, nint hWnd = 0)
     {
+        if (hWnd != 0)
+        {
+            nint monitor = MonitorFromWindow(hWnd, MonitorDefaultToNearest);
+            if (monitor != 0)
+            {
+                MONITORINFO info = default;
+                info.cbSize = (uint)Marshal.SizeOf<MONITORINFO>();
+                if (GetMonitorInfoW(monitor, ref info))
+                {
+                    area = info.rcWork;
+                    return true;
+                }
+            }
+        }
+
         area = default;
         return SystemParametersInfoW(SpiGetWorkArea, 0, ref area, 0);
     }
 
     /// <summary>
-    /// Centra una ventana secundaria sobre su propietaria, acotada al area de trabajo.
+    /// Centra una ventana secundaria sobre su propietaria, acotada al area de trabajo de su monitor.
     /// </summary>
-    /// <remarks>
-    /// El centro sobre la propietaria es el comportamiento que el usuario espera de una
-    /// herramienta abierta desde una ventana concreta; el acotado evita que en un monitor
-    /// pequeno la secundaria quede medio fuera de la pantalla.
-    /// </remarks>
     internal static void CenterOverOwner(Window owner, Window child)
     {
-        if (!TryGetWorkArea(out RECT area))
+        nint ownerHandle = WinRT.Interop.WindowNative.GetWindowHandle(owner);
+        if (!TryGetWorkArea(out RECT area, ownerHandle))
         {
             return;
         }

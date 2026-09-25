@@ -803,7 +803,16 @@ internal sealed unsafe class WasapiExclusiveOutput : IDisposable
             {
                 // El formato del dispositivo es el que usan las fuentes: se escribe directo,
                 // sin copia intermedia.
-                _provider.Render(new Span<float>(destination, samples), _format.Channels);
+                Span<float> destSpan = new(destination, samples);
+                _provider.Render(destSpan, _format.Channels);
+
+                bool transparent = _provider is PlaybackPipeline { IsBitPerfectPassthrough: true }
+                    && Math.Abs(((PlaybackPipeline)_provider).Volume - 1.0) < 0.0001;
+
+                if (!transparent)
+                {
+                    SampleConverter.SoftLimit(destSpan, destSpan);
+                }
             }
             else
             {
@@ -815,7 +824,7 @@ internal sealed unsafe class WasapiExclusiveOutput : IDisposable
                 // garantia bit a bit que el estado declara. Con volumen distinto de uno la
                 // rampa de ganancia altera las muestras y el limitador vuelve a aplicar.
                 bool transparent = _provider is PlaybackPipeline { IsBitPerfectPassthrough: true }
-                    && ((PlaybackPipeline)_provider).Volume == 1.0;
+                    && Math.Abs(((PlaybackPipeline)_provider).Volume - 1.0) < 0.0001;
 
                 if (!transparent)
                 {

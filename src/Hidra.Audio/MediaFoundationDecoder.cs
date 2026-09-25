@@ -399,7 +399,14 @@ internal sealed unsafe class MediaFoundationDecoder : IDisposable
             }
             catch
             {
-                _ = buffer->Release();
+                if (_buffer is not null)
+                {
+                    ReleaseBuffer();
+                }
+                else
+                {
+                    _ = buffer->Release();
+                }
                 throw;
             }
 
