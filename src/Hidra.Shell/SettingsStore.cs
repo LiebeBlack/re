@@ -55,7 +55,8 @@ internal sealed class SettingsStore
     public bool AllowSharedFallback { get; set; } = DefaultAllowSharedFallback;
 
     /// <summary>Calidad del remuestreador. 0 = Estandar (64 taps), 1 = Maxima calidad (128 taps).</summary>
-    public int ResamplerQuality { get; set; } = 0;
+    /// <remarks>El valor por defecto es el 0 del propio int, sin inicializador explicito.</remarks>
+    public int ResamplerQuality { get; set; }
 
     /// <summary>Colocacion recordada de la ventana principal, o null para centrar.</summary>
     public WindowPlacement? Placement { get; set; }
